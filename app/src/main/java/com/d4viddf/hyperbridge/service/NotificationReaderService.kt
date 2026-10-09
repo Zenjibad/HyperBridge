@@ -210,10 +210,20 @@ class NotificationReaderService : NotificationListenerService() {
 
         // [COOLDOWN] The observer only. It writes nothing: the write path is Task 7 of the cooldown
         // plan, which is what keeps the two-writer question from being pre-empted here.
+        //
+        // The options come from the host's own store, read synchronously on this thread through the
+        // `memoryCache` mirror (`getEffectiveCooldownOptionsSync` merges the app's row with the global
+        // one), and they are read *per post* rather than captured here, so a change made in the
+        // settings screen takes effect without a restart. An empty row is every field null, which is
+        // AOSP's own treatment -- the same answer `CooldownPolicy` gives a state with no option.
+        cooldownRuntime.setOptionsSource { origin ->
+            preferences.getEffectiveCooldownOptionsSync(origin)
+        }
         cooldownSensor = CooldownSensorAdapter(
             ownPackage = packageName,
             onAlert = { event -> cooldownRuntime.onAlert(event) },
             onUserInteraction = cooldownOnInteraction,
+            onExempt = { origin, verdict -> cooldownRuntime.onExempt(origin, verdict) },
         )
 
         // [COOLDOWN] The host force-stops like any app, and a force-stop leaves the allow-list granted

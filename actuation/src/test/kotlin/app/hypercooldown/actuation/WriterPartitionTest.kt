@@ -73,7 +73,12 @@ class WriterPartitionTest {
         for (armed in listOf(false, true)) {
             for (owned in listOf(emptySet<String>(), setOf("com.example.chat"), setOf("com.example.chat", "com.example.mail"))) {
                 for (pkg in listOf("com.example.chat", "com.example.mail", host, "")) {
-                    val verdict = WriterPartition.decide(armed, owned, pkg, host)
+                    val verdict = WriterPartition.decide(
+                        secondWriterArmed = armed,
+                        ownedPackages = owned,
+                        packageName = pkg,
+                        ownPackage = host,
+                    )
                     if (verdict is WriterPartition.Verdict.Write) {
                         writes++
                         assertTrue(!armed || owned.contains(pkg), "a write is only legal when nobody else is armed or the key is ours")
@@ -89,5 +94,45 @@ class WriterPartitionTest {
         // The own package and the empty name are refused on every path, and STANDALONE_PACKAGE is not
         // in the cross-product at all.
         assertEquals(9, writes)
+    }
+
+    @Test
+    fun `a disabled cooldown writes nothing, whatever the rest of the inputs say`() {
+        // Spec 4.5's last two rows: the master enable and the per-app enable, which resolves to the
+        // same nullable field. "Off" has to be a refusal at the write path rather than something the
+        // UI hides, because the option set is data and a caller can hand it over in any combination.
+        for (armed in listOf(false, true)) {
+            for (owned in listOf(emptySet<String>(), setOf("com.example.chat"))) {
+                for (pkg in listOf("com.example.chat", "com.example.mail")) {
+                    assertEquals(
+                        WriterPartition.Verdict.Refuse(WriterPartition.Refusal.DISABLED),
+                        WriterPartition.decide(
+                            enabled = false,
+                            secondWriterArmed = armed,
+                            ownedPackages = owned,
+                            packageName = pkg,
+                            ownPackage = host,
+                        ),
+                        "a disabled cooldown must not write $pkg (armed=$armed, owned=$owned)",
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `with the option absent the cooldown is enabled, which is AOSP's own default`() {
+        // `notification_cooldown_enabled` defaults to 1 on AOSP (design spec 2.2), and the option
+        // field is nullable, so "nobody has ever touched this setting" must read as on rather than
+        // as off -- otherwise the feature ships inert and every device criterion fails silently.
+        assertEquals(
+            WriterPartition.Verdict.Write,
+            WriterPartition.decide(
+                secondWriterArmed = false,
+                ownedPackages = emptySet(),
+                packageName = "com.example.chat",
+                ownPackage = host,
+            ),
+        )
     }
 }

@@ -36,6 +36,15 @@ object WriterPartition {
     const val STANDALONE_COMPONENT = "app.hypercooldown/app.hypercooldown.sensor.NotificationSensor"
 
     enum class Refusal {
+        /**
+         * The cooldown is switched off for this package, or globally. Spec 4.5's per-app exemption
+         * row, realised as a refusal at the write path rather than as a control the UI hides: the
+         * option set is data, and every caller of [decide] has to be told no, not merely not shown a
+         * switch. The default is **on**, because AOSP's own `notification_cooldown_enabled` defaults
+         * to 1.
+         */
+        DISABLED,
+
         /** A second cooldown writer is armed and we have no ownership list. We are not the writer. */
         SECOND_WRITER_ACTIVE,
 
@@ -55,11 +64,13 @@ object WriterPartition {
     }
 
     fun decide(
+        enabled: Boolean = true,
         secondWriterArmed: Boolean,
         ownedPackages: Set<String>,
         packageName: String,
         ownPackage: String,
     ): Verdict = when {
+        !enabled -> Verdict.Refuse(Refusal.DISABLED)
         packageName.isEmpty() || packageName == ownPackage -> Verdict.Refuse(Refusal.OWN_PACKAGE)
         packageName == STANDALONE_PACKAGE -> Verdict.Refuse(Refusal.FOREIGN_WRITER)
         !secondWriterArmed -> Verdict.Write

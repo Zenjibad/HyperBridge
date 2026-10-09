@@ -8,6 +8,8 @@ import android.service.notification.StatusBarNotification
 import android.util.Log
 import app.hypercooldown.actuation.AlertEvent
 import app.hypercooldown.actuation.ChannelTarget
+import app.hypercooldown.actuation.CooldownExemptions
+import app.hypercooldown.actuation.Exemption
 import com.d4viddf.hyperbridge.cooldown.act.AndroidChannelMapper
 
 /**
@@ -24,6 +26,12 @@ class CooldownSensorAdapter(
     private val mapper: AndroidChannelMapper = AndroidChannelMapper(),
     private val onAlert: (AlertEvent) -> Unit,
     private val onUserInteraction: (String) -> Unit,
+    /**
+     * Called once per post the exemptions keep out of the engine, with the origin's package so the
+     * line is evidence rather than a count. Defaulted because the exemptions are the only caller and a
+     * no-op default keeps every existing construction site valid.
+     */
+    private val onExempt: (String, Exemption) -> Unit = { _, _ -> },
 ) {
 
     /** Called above every early return in the host's `onNotificationPosted`. */
@@ -59,6 +67,24 @@ class CooldownSensorAdapter(
 
         val ranking = Ranking()
         if (!rankingMap.getRanking(sbn.key, ranking)) return null
+        // Spec 4.5: the exemptions are evaluated **before** the engine is consulted, and an exempt
+        // post is not fed to it at all -- feeding it and discarding the answer would still advance the
+        // post counter and the last-audible timestamp, which is a silent fidelity loss. The check sits
+        // above the channel read so that an exempt post with no readable channel is still reported as
+        // exempt rather than vanishing.
+        //
+        // `runCatching` around `Ranking.isConversation`: the accessor is public API, but this ROM
+        // rewrites notifications and a null-returning or throwing getter must degrade to "not a
+        // conversation" rather than take the listener's callback thread down with it. That arm is
+        // unverified on this ROM either way (`CooldownExemptions`' KDoc says so).
+        val verdict = CooldownExemptions.verdict(
+            category = facts.category,
+            conversation = runCatching { ranking.isConversation }.getOrDefault(false),
+        )
+        if (!CooldownExemptions.shouldFeed(verdict)) {
+            onExempt(facts.packageName, verdict)
+            return null
+        }
         val channel = ranking.channel ?: return null
         Log.d(TAG, "snapshot pkg=${facts.packageName} channel=${channel.id} sound=${channel.sound}")
 
