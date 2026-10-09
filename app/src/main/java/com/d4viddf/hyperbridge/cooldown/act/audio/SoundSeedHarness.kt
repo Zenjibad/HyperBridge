@@ -19,8 +19,8 @@ import kotlin.math.sin
 /**
  * The device harness for the attenuated-sound path, driven over adb:
  *
- *   adb shell am broadcast -a app.hypercooldown.action.SELF_CHECK \
- *     -n app.hypercooldown/.act.SelfCheckReceiver --es action seed-sound
+ *   adb shell am broadcast -a com.d4viddf.hyperbridge.action.SELF_CHECK \
+ *     -n com.d4viddf.hyperbridge/.cooldown.act.SelfCheckReceiver --es action seed-sound
  *
  * It synthesises the spike's own tone (44 100 Hz, mono, 16-bit PCM, three 180 ms bursts with 8 ms
  * fades — 68 840 bytes, the exact artefact Q1 played) and then does three things, one
@@ -38,7 +38,8 @@ import kotlin.math.sin
  * copy's peak must read 30 % of that, which the last device step measures with `adb pull` — so the
  * claim "POLITE is the channel's own sound at 30 %" is checked as *bytes*, not inferred from the log.
  *
- * Plan 3's status UI replaces this, as it replaces [app.hypercooldown.act.SelfCheck].
+ * The cooldown settings screen replaces this, as it replaces
+ * [com.d4viddf.hyperbridge.cooldown.act.SelfCheck].
  */
 class SoundSeedHarness(context: Context) {
 

@@ -59,7 +59,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.hypercooldown.actuation.CooldownOptions
 import com.d4viddf.hyperbridge.R
+import com.d4viddf.hyperbridge.cooldown.ui.CooldownAppSettingsContent
 import com.d4viddf.hyperbridge.models.IslandConfig
 import com.d4viddf.hyperbridge.models.NotificationType
 import com.d4viddf.hyperbridge.ui.AppInfo
@@ -85,6 +87,12 @@ fun AppConfigBottomSheet(
         timeout = 5
     ))
     val blockedTerms by viewModel.getAppBlockedTerms(app.packageName).collectAsState(initial = emptySet())
+
+    // The cooldown's per-app row and the global row it inherits from, in the island group's exact
+    // shape. `CooldownOptions()` as the initial value is every field null, i.e. "this app inherits".
+    val appCooldownOptions by viewModel.getAppCooldownOptions(app.packageName)
+        .collectAsState(initial = CooldownOptions())
+    val cooldownGlobal by viewModel.cooldownGlobalFlow.collectAsState(initial = CooldownOptions())
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -196,6 +204,25 @@ fun AppConfigBottomSheet(
                         appConfig = appIslandConfig,
                         globalConfig = globalConfig,
                         onUpdate = { viewModel.updateAppIslandConfig(app.packageName, it) },
+                        activeDesc = activeDesc,
+                        inactiveDesc = inactiveDesc
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // --- CARD: COOLDOWN ---
+                // The cooldown's own section, in the island's shape: the same expandable card, the
+                // same "use the global default" idiom inside it, and the flows off `AppListViewModel`
+                // rather than a second source of truth.
+                ExpandableSettingCard(
+                    title = stringResource(R.string.cooldown_title),
+                    icon = Icons.Default.Notifications
+                ) {
+                    CooldownAppSettingsContent(
+                        appCooldown = appCooldownOptions,
+                        globalCooldown = cooldownGlobal,
+                        onUpdate = { viewModel.updateAppCooldownOptions(app.packageName, it) },
                         activeDesc = activeDesc,
                         inactiveDesc = inactiveDesc
                     )

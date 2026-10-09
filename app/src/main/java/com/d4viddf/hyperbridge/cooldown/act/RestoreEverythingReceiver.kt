@@ -11,8 +11,8 @@ import android.util.Log
  *
  * Exported behind `android.permission.DUMP`, which `adb shell` holds and no ordinary app does:
  *
- *   adb shell am broadcast -a app.hypercooldown.action.RESTORE_ALL \
- *     -n app.hypercooldown/.act.RestoreEverythingReceiver
+ *   adb shell am broadcast -a com.d4viddf.hyperbridge.action.RESTORE_ALL \
+ *     -n com.d4viddf.hyperbridge/.cooldown.act.RestoreEverythingReceiver
  */
 class RestoreEverythingReceiver : BroadcastReceiver() {
 

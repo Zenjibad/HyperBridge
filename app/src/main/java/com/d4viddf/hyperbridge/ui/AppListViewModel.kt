@@ -10,6 +10,7 @@ import android.graphics.drawable.Drawable
 import androidx.core.graphics.createBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import app.hypercooldown.actuation.CooldownOptions
 import com.d4viddf.hyperbridge.data.AppCacheManager
 import com.d4viddf.hyperbridge.data.AppPreferences
 import com.d4viddf.hyperbridge.data.theme.ThemeRepository
@@ -259,6 +260,20 @@ class AppListViewModel(application: Application) : AndroidViewModel(application)
     }
     fun updateGlobalConfig(config: IslandConfig) {
         viewModelScope.launch { preferences.updateGlobalConfig(config) }
+    }
+
+    // --- COOLDOWN CONFIG ---
+    // The island group's exact shape, one screen over: a flow for the UI, a per-app row, and the
+    // global row the sentinel falls back to. The listener thread does not come through here -- it
+    // reads `AppPreferences.getEffectiveCooldownOptionsSync` off `memoryCache` -- so a change made
+    // here reaches the writer on the next post without a restart.
+    val cooldownGlobalFlow = preferences.cooldownGlobalFlow
+    fun getAppCooldownOptions(packageName: String) = preferences.getAppCooldownOptions(packageName)
+    fun updateAppCooldownOptions(packageName: String, options: CooldownOptions) {
+        viewModelScope.launch { preferences.updateAppCooldownOptions(packageName, options) }
+    }
+    fun updateCooldownGlobal(options: CooldownOptions) {
+        viewModelScope.launch { preferences.updateCooldownGlobal(options) }
     }
 
     // --- BLOCKED TERMS ---

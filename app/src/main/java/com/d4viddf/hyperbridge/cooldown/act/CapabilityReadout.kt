@@ -182,8 +182,10 @@ object CapabilityReadout {
                 "/storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh"
 
         Capability.SHIZUKU_PERMISSION ->
-            "Shizuku is running but has not granted this app. Tap Allow in the dialog this opens " +
-                "(from adb: am start -n app.hypercooldown/.act.ShizukuGrantActivity)."
+            "Shizuku is running but has not granted this app. Tap Allow in the dialog this opens. " +
+                "There is no adb equivalent: a Shizuku grant is per package, and the dialog is the " +
+                "only thing that can make it. The activity the standalone app shipped for this " +
+                "(app.hypercooldown/.act.ShizukuGrantActivity) is not part of this host."
 
         Capability.ROM_ABI_PINNED ->
             "Nothing to do. This ROM's fingerprint differs from the pinned one, so the transport " +

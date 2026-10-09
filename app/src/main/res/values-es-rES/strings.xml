@@ -676,4 +676,92 @@
               • <b>Estabilidad:</b> Mejora en la sincronización de notificaciones y corrección de un error donde las notificaciones originales a veces se eliminaban prematuramente (PR #258).\n
     </string>
     <string name="title_0_5_7">Actualización de Rendimiento y Sincronización</string>
+    <!-- ===================== Notification cooldown ===================== -->
+    <string name="cooldown_title">Notification cooldown</string>
+    <string name="cooldown_desc">Damp a second audible alert from one app, the way Android\'s own polite notifications would</string>
+    <string name="cooldown_enable_title">Cooldown on</string>
+    <string name="cooldown_enable_subtitle">On by default, as Android\'s is. Turn it off to leave every channel exactly as it is.</string>
+
+    <string name="cooldown_section_sound">Sound and vibration</string>
+    <string name="cooldown_sound_polite_title">Silence during the polite phase</string>
+    <string name="cooldown_sound_polite_subtitle">Off means the channel keeps its own sound, scaled to the attenuation factor below. Android does not silence this phase.</string>
+    <string name="cooldown_sound_muted_title">Silence once fully silent</string>
+    <string name="cooldown_sound_muted_subtitle">On by default: this is the phase Android mutes entirely.</string>
+    <string name="cooldown_vibration_polite_title">No vibration during the polite phase</string>
+    <string name="cooldown_vibration_polite_subtitle">Off means the channel keeps its own vibration, scaled down. Android keeps it.</string>
+    <string name="cooldown_vibration_muted_title">No vibration once fully silent</string>
+    <string name="cooldown_vibration_muted_subtitle">On by default: this is the phase Android stops vibrating in.</string>
+
+    <string name="cooldown_factor_title">Attenuation factor</string>
+    <string name="cooldown_factor_subtitle">How loud a second alert is during the polite phase</string>
+    <string name="cooldown_factor_choice_title">Polite volume</string>
+    <string name="cooldown_factor_choice_subtitle">Android scales the alert to 30 % of its own sound. The copy is published where the system can play it, and a quieter copy is harder to hear on a phone speaker.</string>
+    <string name="cooldown_factor_aosp">30 % (Android\'s value)</string>
+    <string name="cooldown_factor_aosp_desc">The value Android\'s polite notifications use. Use this unless there is a reason not to.</string>
+    <string name="cooldown_factor_50_desc">Half volume: audible, but clearly quieter than the first alert.</string>
+    <string name="cooldown_factor_10_desc">Effectively inaudible on a phone speaker, even at full media volume. The fully-silent phase is the honest way to express this.</string>
+
+    <string name="cooldown_section_timing">Timing</string>
+    <string name="cooldown_timing_polite_title">Polite phase begins</string>
+    <string name="cooldown_timing_polite_subtitle">How long after the last audible alert the cooldown starts</string>
+    <string name="cooldown_timing_aosp_60">60 s (Android\'s value)</string>
+    <string name="cooldown_timing_polite_60_desc">Android\'s own window. The first alert of a burst is untouched.</string>
+    <string name="cooldown_timing_polite_30_desc">A shorter window: fewer alerts are damped.</string>
+    <string name="cooldown_timing_polite_120_desc">A longer window: more of a burst is damped. A long polite phase is not an error, only a wider one.</string>
+    <string name="cooldown_timing_muted_title">Fully silent begins</string>
+    <string name="cooldown_timing_muted_subtitle">How long after the last audible alert everything goes quiet</string>
+    <string name="cooldown_timing_aosp_10">10 s (Android\'s value)</string>
+    <string name="cooldown_timing_muted_10_desc">Android\'s own second threshold.</string>
+    <string name="cooldown_timing_muted_5_desc">Quieter sooner. This must be shorter than the polite window to mean anything.</string>
+    <string name="cooldown_timing_muted_30_desc">Quieter later, so the polite phase carries more of the burst.</string>
+    <string name="cooldown_counter_title">Posts before the counter resets</string>
+    <string name="cooldown_counter_subtitle">Silent posts that clear the cooldown for this app</string>
+    <string name="cooldown_counter_aosp">10 (Android\'s value)</string>
+    <string name="cooldown_counter_aosp_desc">Android\'s own reset count.</string>
+    <string name="cooldown_counter_5_desc">Resets sooner: the cooldown ends after fewer quiet posts.</string>
+    <string name="cooldown_counter_20_desc">Resets later: the cooldown survives a longer quiet stretch.</string>
+
+    <string name="cooldown_section_island">Island</string>
+    <string name="cooldown_island_free_note">Free: the island is this app\'s own notification, so not showing it changes nothing on the other app\'s channel</string>
+    <string name="cooldown_island_polite_title">Hide the island during the polite phase</string>
+    <string name="cooldown_island_polite_subtitle">The island simply is not shown. Nothing is written to the other app\'s channel.</string>
+    <string name="cooldown_island_muted_title">Hide the island once fully silent</string>
+    <string name="cooldown_island_muted_subtitle">The notification stays in the shade either way; only the floating island is held back.</string>
+
+    <string name="cooldown_section_heads_up">Heads-up</string>
+    <string name="cooldown_heads_up_warning_title">This lowers the channel\'s importance</string>
+    <string name="cooldown_heads_up_warning_message">Suppressing a heads-up is only possible by lowering the channel\'s importance, which is a permanent, user-locked change: Android will not let this app undo the lock, it changes how the notification appears everywhere and not only during the cooldown, and if this app is force-stopped while it is lowered, nothing is left to put it back until the app runs again. Android does not do this; this is a deliberate deviation.</string>
+    <string name="cooldown_heads_up_ack_title">I understand the importance change is permanent</string>
+    <string name="cooldown_heads_up_ack_subtitle">Until this is on, the two rows below cannot be turned on at all.</string>
+    <string name="cooldown_heads_up_polite_title">Suppress the heads-up during the polite phase</string>
+    <string name="cooldown_heads_up_polite_subtitle">Needs the acknowledgement above. Android keeps the heads-up in this phase.</string>
+    <string name="cooldown_heads_up_muted_title">Suppress the heads-up once fully silent</string>
+    <string name="cooldown_heads_up_muted_subtitle">Needs the acknowledgement above. Android\'s fully-silent phase still shows the heads-up.</string>
+
+    <string name="cooldown_section_visibility">Shade entry</string>
+    <string name="cooldown_visibility_keep_title">Keep visible in the shade</string>
+    <string name="cooldown_visibility_keep_subtitle">Android\'s behaviour, and what this app always does: only the alert\'s attention effects are damped.</string>
+    <string name="cooldown_visibility_hide_title">Hide entirely</string>
+    <string name="cooldown_visibility_deferred_message">Hiding a notification entirely is not offered: the only lever is a locked visibility write with the same permanent cost as the importance change above, and it is never done by cancelling, because cancelling the original also kills the watch relay that companion apps depend on. The alert has already played by the time this app sees it.</string>
+
+    <string name="cooldown_section_exemptions">Never damped</string>
+    <string name="cooldown_exemptions_message">Calls, alarms, reminders and events, and important conversations are never damped, on any channel: they are not merely left alone, they are kept out of the cooldown entirely so they cannot affect the timing of anything else. Ongoing and foreground-service notifications are skipped for the same reason. The per-app switch above is the fifth exemption.</string>
+
+    <string name="cooldown_second_writer_title">Two cooldown apps on one device</string>
+    <string name="cooldown_second_writer_message">The standalone Cooldown app and this one can both rewrite a channel\'s sound and vibration. If both do it, the second one scales an already-scaled alert. So this app refuses to write anything while the other one\'s listener is armed, and says so in its log rather than working quietly against it.</string>
+    <string name="cooldown_second_writer_option_a">Option A — restore first, then let this app damp: uninstall or disable the standalone app\'s notification access. Its write-ahead records live inside its own process and cannot be read from here, so anything it damped must be put back by it before it goes.</string>
+    <string name="cooldown_second_writer_option_b">Option B — keep both, and let this app own an explicit list of apps: not available yet. The standalone app gains an exclusion list in its own project; until that ships, this app refuses to write while its listener is armed, whatever the list says.</string>
+    <string name="cooldown_second_writer_armed_message">The standalone Cooldown app is armed, so this app is not writing any channel. Nothing here is broken: the cooldown is being done by the other app.</string>
+    <string name="cooldown_second_writer_clear_message">No second cooldown writer found. This app is the one damping channels.</string>
+    <string name="cooldown_second_writer_unknown_message">The list of armed listeners could not be read, so this app is assuming another writer may exist and is not writing. The reading is retried on every alert.</string>
+
+    <string name="cooldown_status_title">Cooldown writer</string>
+    <string name="cooldown_row_subtitle">engine says %1$s · last write recorded: %2$s</string>
+    <string name="cooldown_row_no_engine">unknown (no live engine)</string>
+    <string name="cooldown_residue_title">Channel lock residue</string>
+    <string name="cooldown_status_footnote">A channel rewrite leaves Android\'s own user-lock bits behind on the channel. The values are put back; the lock cannot be cleared by any app. The line above is derived from what this app wrote, not observed, so it is a lower bound.</string>
+
+    <string name="cooldown_use_global">Use the global default</string>
+    <string name="cooldown_app_override_note">This app has its own cooldown row. Everything left on its Android default follows the global row.</string>
+    <string name="cooldown_app_defaults_desc">This app follows the global cooldown settings.</string>
 </resources>

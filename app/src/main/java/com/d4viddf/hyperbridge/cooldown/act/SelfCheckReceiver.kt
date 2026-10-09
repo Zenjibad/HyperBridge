@@ -13,8 +13,8 @@ import com.d4viddf.hyperbridge.cooldown.act.audio.SoundSeedHarness
  * (uid 2000) holds DUMP and a non-exported component cannot be started from adb at all — while no
  * ordinary app can reach a DUMP-guarded one. Plan 3 replaces this with the status UI.
  *
- *   adb shell am broadcast -a app.hypercooldown.action.SELF_CHECK \
- *     -n app.hypercooldown/.act.SelfCheckReceiver --es action round-trip
+ *   adb shell am broadcast -a com.d4viddf.hyperbridge.action.SELF_CHECK \
+ *     -n com.d4viddf.hyperbridge/.cooldown.act.SelfCheckReceiver --es action round-trip
  */
 class SelfCheckReceiver : BroadcastReceiver() {
 

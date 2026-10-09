@@ -7,6 +7,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.navigation3.runtime.entryProvider
 import com.d4viddf.hyperbridge.R
 import com.d4viddf.hyperbridge.data.AppPreferences
+import com.d4viddf.hyperbridge.cooldown.ui.CooldownSettingsScreen
 import com.d4viddf.hyperbridge.ui.screens.home.HomeScreen
 import com.d4viddf.hyperbridge.ui.screens.onboarding.OnboardingScreen
 import com.d4viddf.hyperbridge.ui.screens.settings.AppPriorityScreen
@@ -71,7 +72,8 @@ fun mainNavGraph(
             onIslandSettingsClick = { navigator.navigate(Screen.IslandSettings) },
             onEngineSettingsClick = { navigator.navigate(Screen.EngineSettings) },
             onDndSettingsClick = { navigator.navigate(Screen.DndSettings) },
-            onPermanentIslandClick = { navigator.navigate(Screen.PermanentIslandConfig) }
+            onPermanentIslandClick = { navigator.navigate(Screen.PermanentIslandConfig) },
+            onCooldownSettingsClick = { navigator.navigate(Screen.CooldownSettings) }
         )
     }
     entry<Screen.DndSettings> {
@@ -150,5 +152,8 @@ fun mainNavGraph(
     }
     entry<Screen.IslandSettings> {
         IslandSettingsScreen(onBack = { navigator.goBack() })
+    }
+    entry<Screen.CooldownSettings> {
+        CooldownSettingsScreen(onBack = { navigator.goBack() })
     }
 }

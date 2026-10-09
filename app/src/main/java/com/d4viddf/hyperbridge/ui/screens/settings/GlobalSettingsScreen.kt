@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.DoNotDisturbOn
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Navigation
+import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
@@ -51,7 +52,8 @@ fun GlobalSettingsScreen(
     onIslandSettingsClick: () -> Unit,
     onEngineSettingsClick: () -> Unit,
     onDndSettingsClick: () -> Unit,
-    onPermanentIslandClick: () -> Unit
+    onPermanentIslandClick: () -> Unit,
+    onCooldownSettingsClick: () -> Unit
 ) {
 
     Scaffold(
@@ -118,6 +120,18 @@ fun GlobalSettingsScreen(
                 icon = Icons.Outlined.PushPin,
                 shape = getExpressiveShape(6, 5, ShapeStyle.Large),
                 onClick = onPermanentIslandClick
+            )
+            Spacer(Modifier.height(16.dp))
+
+            // Its own group, one card tall: the cooldown is a behaviour of its own rather than
+            // another island option, and `getExpressiveShape(1, 0, …)` is what the host's own helper
+            // answers for a group of one -- so none of the six shapes above has to move.
+            ListOptionCard(
+                title = stringResource(R.string.cooldown_title),
+                subtitle = stringResource(R.string.cooldown_desc),
+                icon = Icons.Outlined.NotificationsActive,
+                shape = getExpressiveShape(1, 0, ShapeStyle.Large),
+                onClick = onCooldownSettingsClick
             )
             Spacer(Modifier.height(16.dp))
             
