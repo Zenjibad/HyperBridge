@@ -216,6 +216,21 @@ class NotificationReaderService : NotificationListenerService() {
             onUserInteraction = cooldownOnInteraction,
         )
 
+        // [COOLDOWN] The host force-stops like any app, and a force-stop leaves the allow-list granted
+        // but the listener unbound. Transaction 117 is the measured remedy (`CLAUDE.md` section 6);
+        // `requestRebind` is not, because `ManagedServices.setComponentState` early-returns for a
+        // component that is already enabled, which it is. This call site is a service, where an
+        // escaping exception can take the listener down, so it carries its own boundary on top of
+        // `ListenerWatchdog`'s inner one -- the difference spec 6.1 warns about.
+        runCatching { ListenerWatchdog.ensureBound(this, "service created") }
+            .onFailure {
+                Log.e(
+                    CooldownRuntime.TAG,
+                    "self-heal failed at service create: ${it::class.java.name}",
+                    it,
+                )
+            }
+
         // [INIT] Theme Engine
         themeRepository = ThemeRepository(this)
         rulesEngine = RulesEngine()

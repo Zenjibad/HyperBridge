@@ -2,6 +2,7 @@ package com.d4viddf.hyperbridge
 
 import android.content.Context
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.BackEventCompat
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -39,6 +40,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.ui.NavDisplay
 import com.d4viddf.hyperbridge.data.AppPreferences
+import com.d4viddf.hyperbridge.cooldown.act.CooldownRuntime
+import com.d4viddf.hyperbridge.cooldown.act.ListenerWatchdog
 import com.d4viddf.hyperbridge.data.db.AppDatabase
 import com.d4viddf.hyperbridge.ui.components.ChangelogSheet
 import com.d4viddf.hyperbridge.ui.navigation.Navigator
@@ -64,6 +67,29 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * The standalone cooldown app's own round-3 trigger, and the one that recovers a force-close plus
+     * reopen with no manual toggle (verified on the device). `RebindPolicy` rate-limits the request
+     * inside `ListenerWatchdog` -- a 3 s grace and a 30 s floor -- so a resume cannot become a storm,
+     * and `RebindPolicy.healStep` answers nothing at all when notification access is not granted,
+     * which is what keeps this from ever re-granting a permission the user revoked.
+     *
+     * The boundary is here as well as inside the watchdog: this is an Activity lifecycle callback,
+     * and a binder call to a security-relevant interface can come back as an unexpected runtime
+     * exception on this ROM.
+     */
+    override fun onResume() {
+        super.onResume()
+        runCatching { ListenerWatchdog.ensureBound(this, "activity resumed") }
+            .onFailure {
+                Log.e(
+                    CooldownRuntime.TAG,
+                    "self-heal failed at resume: ${it::class.java.name}",
+                    it,
+                )
+            }
     }
 }
 
