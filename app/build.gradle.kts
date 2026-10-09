@@ -45,6 +45,11 @@ android {
 }
 
 dependencies {
+    // The cooldown's pure half — `:engine` (the AOSP `PolitenessStrategy` port) and `:actuation`
+    // (every decision that needs no Android). Task 1 vendored both into this build; this is the edge
+    // that lets `:app` and its unit tests see them. `:actuation` re-exports `:engine` with `api`.
+    implementation(project(":actuation"))
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)

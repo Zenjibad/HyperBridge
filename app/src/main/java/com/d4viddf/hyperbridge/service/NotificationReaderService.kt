@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
 import android.service.notification.NotificationListenerService
+import android.service.notification.NotificationListenerService.RankingMap
 import android.service.notification.StatusBarNotification
 import android.util.Log
 import androidx.annotation.RequiresPermission
@@ -18,6 +19,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.d4viddf.hyperbridge.MainActivity
 import com.d4viddf.hyperbridge.R
+import com.d4viddf.hyperbridge.cooldown.sensor.CooldownSensorAdapter
 import com.d4viddf.hyperbridge.data.AppPreferences
 import com.d4viddf.hyperbridge.data.db.AppDatabase
 import com.d4viddf.hyperbridge.data.theme.RulesEngine
@@ -184,6 +186,19 @@ class NotificationReaderService : NotificationListenerService() {
         
         preferences = AppPreferences(applicationContext)
         createChannels()
+
+        // [COOLDOWN] The observer only. It writes nothing: the write path is Task 7 of the cooldown
+        // plan, which is what keeps the two-writer question from being pre-empted here.
+        cooldownSensor = CooldownSensorAdapter(
+            ownPackage = packageName,
+            onAlert = { event ->
+                Log.d(
+                    "CooldownSensor",
+                    "event key=${event.target.key} channel=${event.snapshot.fields.channelId} " +
+                        "audibleAt=${event.rankingLastAudiblyAlertedMs}",
+                )
+            },
+        )
 
         // [INIT] Theme Engine
         themeRepository = ThemeRepository(this)
@@ -594,8 +609,19 @@ class NotificationReaderService : NotificationListenerService() {
     //  STANDARD NOTIFICATION LOGIC
     // =========================================================================
 
+    /**
+     * The cooldown's view of the post stream. Null until `onCreate` builds it, and never the only
+     * listener: this is the host's own `NotificationReaderService`, with one more consumer.
+     */
+    private var cooldownSensor: CooldownSensorAdapter? = null
+
     @RequiresPermission(Manifest.permission.POST_NOTIFICATIONS)
-    override fun onNotificationPosted(sbn: StatusBarNotification?) {
+    override fun onNotificationPosted(sbn: StatusBarNotification?, rankingMap: RankingMap?) {
+        // The cooldown observe call goes ABOVE every early return below (`shouldIgnore` at :620,
+        // `isAppAllowed` at :621, the DND return in `processStandardNotification`, the island
+        // bookkeeping at :600-618). An app the user never enabled for islands must still get a
+        // cooldown, and a DND window must not starve the relaxation path.
+        cooldownSensor?.onPosted(sbn, rankingMap)
         sbn?.let {
             if (it.packageName != packageName) {
                 val extras = it.notification.extras
