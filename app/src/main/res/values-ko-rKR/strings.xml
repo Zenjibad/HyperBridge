@@ -680,11 +680,11 @@
     <string name="cooldown_counter_20_desc">Resets later: the cooldown survives a longer quiet stretch.</string>
 
     <string name="cooldown_section_island">Island</string>
-    <string name="cooldown_island_free_note">Free: the island is this app\'s own notification, so not showing it changes nothing on the other app\'s channel</string>
+    <string name="cooldown_island_free_note">No channel write, no lock bit: hiding the island only stops this app raising its own notification for that alert</string>
     <string name="cooldown_island_polite_title">Hide the island during the polite phase</string>
-    <string name="cooldown_island_polite_subtitle">The island simply is not shown. Nothing is written to the other app\'s channel.</string>
+    <string name="cooldown_island_polite_subtitle">Nothing of this app is raised for that alert - no island and no HyperBridge notification. The other app\'s own notification stays in the shade, untouched.</string>
     <string name="cooldown_island_muted_title">Hide the island once fully silent</string>
-    <string name="cooldown_island_muted_subtitle">The notification stays in the shade either way; only the floating island is held back.</string>
+    <string name="cooldown_island_muted_subtitle">Nothing of this app is raised for that alert. The other app\'s own notification stays in the shade, untouched, and no channel is written.</string>
 
     <string name="cooldown_section_heads_up">Heads-up</string>
     <string name="cooldown_heads_up_warning_title">This lowers the channel\'s importance</string>

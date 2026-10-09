@@ -280,7 +280,13 @@ fun CooldownOptionsEditor(
 
         Spacer(Modifier.height(16.dp))
 
-        // ---- The island: free, so it is honoured without a gate and needs no warning ----
+        // ---- The island: no channel write, so it is honoured without a gate -- but its realisation is
+        // visible, so the copy says what disappears. The cost is asymmetric with heads-up (nothing is
+        // written, nothing is locked), which is why this row is ungated; the earlier note here said the
+        // option "needs no warning", and that half is now falsified: realised as "post the notification
+        // and withhold the focus template", it surfaced the host's own `notification_went_wrong` body as
+        // a fault banner on 2026-10-10. Suppression is realised as *absent* instead (IslandRealisation),
+        // and the strings below say so. ----
         ExpandableSettingCard(
             title = stringResource(R.string.cooldown_section_island),
             icon = Icons.Outlined.NotificationsActive,

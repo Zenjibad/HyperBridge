@@ -22,8 +22,8 @@ import com.d4viddf.hyperbridge.R
 import com.d4viddf.hyperbridge.cooldown.act.CooldownRuntime
 import com.d4viddf.hyperbridge.cooldown.act.ListenerWatchdog
 import com.d4viddf.hyperbridge.cooldown.sensor.CooldownSensorAdapter
+import com.d4viddf.hyperbridge.cooldown.sensor.IslandRealisation
 import app.hypercooldown.actuation.CooldownPolicy
-import app.hypercooldown.actuation.IslandOption
 import com.d4viddf.hyperbridge.data.AppPreferences
 import com.d4viddf.hyperbridge.data.db.AppDatabase
 import com.d4viddf.hyperbridge.data.theme.RulesEngine
@@ -774,6 +774,26 @@ class NotificationReaderService : NotificationListenerService() {
                 return
             }
 
+            // [COOLDOWN] Spec 4.2 and criterion A10: a suppressed island is *absent*. This is the whole
+            // decision, and it sits here -- above every piece of island bookkeeping below, and above the
+            // live-update/standard split further down -- because ABSENT has to mean "this host raises
+            // nothing for this origin's post": the coalescing blocks below *move* `activeTranslations`
+            // and `activeIslands` entries for a group or a download that repeats, and bailing out after
+            // them would leave a previous island posted with no bookkeeping pointing at it (an orphan the
+            // host's own sync would then never reap).
+            //
+            // What it does NOT do: it does not cancel, touch or re-rank the origin's own notification.
+            // `handlePostNotificationSideEffects` is skipped with the post, so `removeOriginalNotification`
+            // is not honoured for this one alert either -- with no island to replace it, cancelling the
+            // original would hide the alert from the user entirely, and spec 6 promises the notification
+            // stays visible. The user's tap still clears the cooldown: the origin's own notification
+            // arrives as REASON_CLICK, and `cooldownSensor?.onRemoved` is called above the host's own
+            // removal filters.
+            if (islandVerdict(sbn.packageName) == IslandRealisation.Verdict.ABSENT) {
+                Log.i(TAG, "island suppressed for ${sbn.packageName}: nothing raised for this alert (A10)")
+                return
+            }
+
             var effectiveKey = key
             removalJobs[effectiveKey]?.cancel()
             removalJobs.remove(effectiveKey)
@@ -1160,17 +1180,17 @@ class NotificationReaderService : NotificationListenerService() {
         }
 
         val notification = builder.build()
-        // Spec 4.2: suppressing the island is FREE. The island is this app's own notification --
-        // HyperOS SystemUI renders it from `miui.focus.param` -- so not attaching the param touches no
-        // channel of the origin app and writes nothing to the system. That asymmetry is why this
-        // option needs no warning and no acknowledgement, while heads-up does. It is deliberately
-        // *not* gated on the heads-up acknowledgement: the two options are separate rows and only one
-        // of them costs anything.
-        if (cooldownAllowsIsland(sbn.packageName)) {
-            notification.extras.putString("miui.focus.param", data.jsonParam)
-        } else {
-            Log.d(CooldownRuntime.TAG, "island suppressed for ${sbn.packageName}")
-        }
+        // Upstream's unconditional attach, restored. The island *is* this extra: HyperOS SystemUI
+        // renders the focus template from it, and the placeholder body above is never meant to be read
+        // because of it. Withholding the extra while still posting was the fork's realisation of
+        // "suppress", and it is the one thing that must not happen here -- the notification is then
+        // rendered by SystemUI itself, body included, and that body is
+        // `R.string.notification_went_wrong` ("If you see this, something went wrong!"). A suppressed
+        // island is realised as *absent*, before this function is ever called, by
+        // `IslandRealisation`'s verdict at the top of the island branch (spec 4.2, A10). This function
+        // therefore has no suppression branch at all: either it posts a real island, or it is not
+        // called.
+        notification.extras.putString("miui.focus.param", data.jsonParam)
 
         if (!shouldAlertOnce) {
             ShizukuManager.notifyWithCancel(this, bridgeId, notification)
@@ -1183,27 +1203,31 @@ class NotificationReaderService : NotificationListenerService() {
     }
 
     /**
-     * The island flag for one origin app, read from the cooldown's realised presentation for the state
+     * What to do about this host's own island for one origin: [IslandRealisation.Verdict.RAISE] or
+     * [IslandRealisation.Verdict.ABSENT], read from the cooldown's realised presentation for the state
      * the engine currently has installed. A package with no live plan is not in a cooldown, so the
      * island renders as it always did.
      *
      * `packageName` -- this service's own -- is passed as `CooldownPolicy.presentation`'s `ownPackage`.
-     * The plan's snippet passes the origin package twice, and `presentation` answers `null` for the
+     * The plan's snippet passed the origin package twice, and `presentation` answers `null` for the
      * host's own package *unconditionally* (spec 7, risks 1 and 2), so that version returns `null` for
-     * every app and the `?: return true` below makes this whole guard dead. It is the same trap the
+     * every app and a `?: return RAISE` makes the whole guard dead. It is the same trap the
      * `installedStateFor` key shape would have been: both would have shipped as a guard that never
      * suppresses anything, and neither would fail a test.
+     *
+     * The verdict itself is a pure function in `IslandRealisation` so the decision is pinned by
+     * `IslandRealisationTest`; the call sites -- this one, and the branch it guards -- are what A10
+     * measures on the device.
      */
-    private fun cooldownAllowsIsland(originPackage: String): Boolean {
+    private fun islandVerdict(originPackage: String): IslandRealisation.Verdict {
         val runtime = cooldownRuntime
-        val state = runtime.installedStateFor(originPackage) ?: return true
+        val state = runtime.installedStateFor(originPackage) ?: return IslandRealisation.Verdict.RAISE
         val options = runtime.effectiveOptionsFor(originPackage)
-        val presentation =
-            CooldownPolicy.presentation(state, originPackage, packageName, options) ?: return true
+        val presentation = CooldownPolicy.presentation(state, originPackage, packageName, options)
         // Spec 4.7: `mutedVisibility` is read here and realised nowhere, so the one place that reads a
         // presentation says so once instead of letting the option be a silent no-op.
-        runtime.noteUnrealisedVisibility(originPackage, presentation)
-        return presentation.island == IslandOption.INHERIT
+        presentation?.let { runtime.noteUnrealisedVisibility(originPackage, it) }
+        return IslandRealisation.verdict(presentation)
     }
 
     // =========================================================================
