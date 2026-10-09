@@ -18,12 +18,16 @@ import app.hypercooldown.actuation.ChannelActuator
 import app.hypercooldown.actuation.ChannelSnapshot
 import app.hypercooldown.actuation.ChannelTransport
 import app.hypercooldown.actuation.CooldownCoordinator
+import app.hypercooldown.actuation.CooldownKeys
 import app.hypercooldown.actuation.CooldownOptions
 import app.hypercooldown.actuation.Exemption
+import app.hypercooldown.actuation.Presentation
 import app.hypercooldown.actuation.PropertiesSnapshotStore
 import app.hypercooldown.actuation.SnapshotStore
+import app.hypercooldown.actuation.VisibilityOption
 import app.hypercooldown.actuation.WriteResult
 import app.hypercooldown.actuation.WriterPartition
+import com.d4viddf.hyperbridge.cooldown.sensor.SecondWriterProbe
 import app.hypercooldown.engine.CooldownState
 import app.hypercooldown.engine.EngineConfig
 import java.util.concurrent.ExecutorService
@@ -408,6 +412,63 @@ class CooldownRuntime private constructor(private val context: Context) {
     fun tuning(): TuningValues = tuningValues
 
     /**
+     * The state the cooldown has installed for a package, or null when it has never damped it.
+     *
+     * The **write-ahead record is the witness**, not the coordinator's own map: a coordinator answers
+     * `DEFAULT` for a key it has never seen, and "never seen" and "installed DEFAULT" must not be the
+     * same answer here -- the first means "render the island as usual", the second means "the cooldown
+     * owns this key and is currently at DEFAULT".
+     *
+     * One honest limitation, stated rather than hidden: this answers from `configByKey`, so a key
+     * damped before this process started and not yet re-planned answers `null`, and its island renders
+     * as usual. That is the safe direction -- no island is suppressed for an app this process has no
+     * live plan for -- and it is the same shape as the cold-start carve-out in `MEMORY.md` §3.9.
+     */
+    @Synchronized
+    fun installedStateFor(packageName: String): CooldownState? {
+        val key = CooldownKeys.perApp(PlatformUser.id(), packageName)
+        if (store.snapshotFor(key) == null) return null
+        return coordinatorForKey(key)?.installedFor(key)
+    }
+
+    /** The options one origin app's presentation is decided from, merged with the global row. */
+    fun effectiveOptionsFor(packageName: String): CooldownOptions = optionsFor(packageName)
+
+    /**
+     * Spec 4.7: there is no "hide for a while" API, and the only channel-level lever is
+     * `setLockscreenVisibility`, which is `USER_LOCKED_VISIBILITY = 0x2` -- a persistent, user-locked
+     * write with the same class of cost as heads-up. It is realised nowhere in this build: the option
+     * exists in the set and in [CooldownPolicy.Presentation], and the realisation is deferred.
+     *
+     * The point of returning the sentence rather than only logging it is that the status card can show
+     * the same words the log carries, so a user who set the option sees why nothing happened instead
+     * of a silent no-op.
+     */
+    fun visibilityUnsupportedNote(): String =
+        "hide-entirely is deferred: it needs a locked visibility write, and cancellation is refused"
+
+    private var visibilityNoteLogged = false
+
+    /**
+     * Says the deferred-visibility sentence once per process, at the point the option is actually
+     * read, and only when the option is set. Nothing else in this class reads `presentation.visibility`
+     * yet -- "hide entirely" has no lever that is not the locked write the note names.
+     *
+     * Never by cancelling: the alert has already fired by the time the listener sees the post, ongoing
+     * notifications cannot be cancelled, and in this host cancelling the original is known to break the
+     * watch relay (`NotificationReaderService.kt:520-523`).
+     */
+    @Synchronized
+    fun noteUnrealisedVisibility(packageName: String, presentation: Presentation) {
+        if (presentation.visibility != VisibilityOption.HIDDEN || visibilityNoteLogged) return
+        visibilityNoteLogged = true
+        Log.w(
+            TAG,
+            "not hiding $packageName entirely: ${visibilityUnsupportedNote()} (spec 4.7)",
+        )
+    }
+
+    /**
      * Stores [values] and rebuilds the engine's configuration from them.
      *
      * The coordinator is dropped rather than mutated, because a plan it already holds was computed
@@ -527,6 +588,20 @@ class CooldownRuntime private constructor(private val context: Context) {
         selectionNote = "${TransportSelector.describe(choice)} (${report.describe()})"
         val selected = TransportSelector.transportFor(choice, mapper, { PrivilegedListenerHolder.service })
         transport = selected
+        // Layer 1 of spec 1.1: the fork concedes by default. `null` from the probe means "nothing
+        // readable", and the fail-closed reading of an unreadable signal is "another writer may be
+        // armed". Re-probed here rather than once at startup, because this is the pass that every
+        // listener reconnect runs, and the probe is asked again on every write attempt besides.
+        setSecondWriterProbe {
+            when (val armed = SecondWriterProbe.armed(context)) {
+                null -> {
+                    Log.w(TAG, "second-writer probe unreadable; assuming another writer may be armed")
+                    true
+                }
+
+                else -> armed
+            }
+        }
         // Every coordinator was built from the transport that was just replaced. Dropping them is the
         // same trade `applyTuning` makes and for the same reason: a live plan is also a write-ahead
         // record, so the next `reconcile()` restores from disk rather than from a coordinator that

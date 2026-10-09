@@ -22,6 +22,8 @@ import com.d4viddf.hyperbridge.R
 import com.d4viddf.hyperbridge.cooldown.act.CooldownRuntime
 import com.d4viddf.hyperbridge.cooldown.act.ListenerWatchdog
 import com.d4viddf.hyperbridge.cooldown.sensor.CooldownSensorAdapter
+import app.hypercooldown.actuation.CooldownPolicy
+import app.hypercooldown.actuation.IslandOption
 import com.d4viddf.hyperbridge.data.AppPreferences
 import com.d4viddf.hyperbridge.data.db.AppDatabase
 import com.d4viddf.hyperbridge.data.theme.RulesEngine
@@ -1158,7 +1160,17 @@ class NotificationReaderService : NotificationListenerService() {
         }
 
         val notification = builder.build()
-        notification.extras.putString("miui.focus.param", data.jsonParam)
+        // Spec 4.2: suppressing the island is FREE. The island is this app's own notification --
+        // HyperOS SystemUI renders it from `miui.focus.param` -- so not attaching the param touches no
+        // channel of the origin app and writes nothing to the system. That asymmetry is why this
+        // option needs no warning and no acknowledgement, while heads-up does. It is deliberately
+        // *not* gated on the heads-up acknowledgement: the two options are separate rows and only one
+        // of them costs anything.
+        if (cooldownAllowsIsland(sbn.packageName)) {
+            notification.extras.putString("miui.focus.param", data.jsonParam)
+        } else {
+            Log.d(CooldownRuntime.TAG, "island suppressed for ${sbn.packageName}")
+        }
 
         if (!shouldAlertOnce) {
             ShizukuManager.notifyWithCancel(this, bridgeId, notification)
@@ -1168,6 +1180,30 @@ class NotificationReaderService : NotificationListenerService() {
 
         activeTranslations[sbn.key] = bridgeId
         reverseTranslations[bridgeId] = sbn.key
+    }
+
+    /**
+     * The island flag for one origin app, read from the cooldown's realised presentation for the state
+     * the engine currently has installed. A package with no live plan is not in a cooldown, so the
+     * island renders as it always did.
+     *
+     * `packageName` -- this service's own -- is passed as `CooldownPolicy.presentation`'s `ownPackage`.
+     * The plan's snippet passes the origin package twice, and `presentation` answers `null` for the
+     * host's own package *unconditionally* (spec 7, risks 1 and 2), so that version returns `null` for
+     * every app and the `?: return true` below makes this whole guard dead. It is the same trap the
+     * `installedStateFor` key shape would have been: both would have shipped as a guard that never
+     * suppresses anything, and neither would fail a test.
+     */
+    private fun cooldownAllowsIsland(originPackage: String): Boolean {
+        val runtime = cooldownRuntime
+        val state = runtime.installedStateFor(originPackage) ?: return true
+        val options = runtime.effectiveOptionsFor(originPackage)
+        val presentation =
+            CooldownPolicy.presentation(state, originPackage, packageName, options) ?: return true
+        // Spec 4.7: `mutedVisibility` is read here and realised nowhere, so the one place that reads a
+        // presentation says so once instead of letting the option be a silent no-op.
+        runtime.noteUnrealisedVisibility(originPackage, presentation)
+        return presentation.island == IslandOption.INHERIT
     }
 
     // =========================================================================
