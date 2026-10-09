@@ -5,6 +5,9 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
+import app.hypercooldown.actuation.CooldownOptions
+import com.d4viddf.hyperbridge.cooldown.data.CooldownPreferenceCodec
+import com.d4viddf.hyperbridge.cooldown.data.CooldownPreferenceKeys
 import com.d4viddf.hyperbridge.data.db.AppDatabase
 import com.d4viddf.hyperbridge.data.db.AppSetting
 import com.d4viddf.hyperbridge.data.db.SettingsKeys
@@ -242,6 +245,35 @@ class AppPreferences(context: Context) {
         config.enableInlineReply?.let { save(SettingsKeys.GLOBAL_ENABLE_INLINE_REPLY, it.toString()) }
     }
 
+    // --- COOLDOWN: the global row ---
+    //
+    // Room, not DataStore: this class migrates the legacy DataStore into Room and then clears it
+    // (`:27`, `:65`, `:74` above), so DataStore is the store being retired. The cooldown options are
+    // ordinary rows in the same key/value `settings` table (`data/db/AppSettings.kt:6-10`), which is
+    // why adding them needs no Room schema change and no `Migration`: `AppDatabase` stays at
+    // `version = 1` (`data/db/AppDatabase.kt:8`).
+
+    val cooldownGlobalFlow: Flow<CooldownOptions> = combine(
+        CooldownPreferenceCodec.FIELDS.map { field ->
+            dao.getSettingFlow(CooldownPreferenceKeys.global(field))
+        },
+    ) { values ->
+        CooldownPreferenceCodec.decode(
+            CooldownPreferenceCodec.FIELDS.mapIndexed { i, field -> field to values[i] }
+                .filter { it.second != null }
+                .associate { it.first to it.second!! },
+        )
+    }
+
+    suspend fun updateCooldownGlobal(options: CooldownOptions) {
+        val encoded = CooldownPreferenceCodec.encode(options)
+        CooldownPreferenceCodec.FIELDS.forEach { field ->
+            val key = CooldownPreferenceKeys.global(field)
+            val value = encoded[field]
+            if (value != null) save(key, value) else remove(key)
+        }
+    }
+
     fun getAppIslandConfig(packageName: String): Flow<IslandConfig> {
         return combine(
             dao.getSettingFlow("config_${packageName}_float"),
@@ -280,6 +312,31 @@ class AppPreferences(context: Context) {
         if (config.removeOriginalNotification != null) save(rnKey, config.removeOriginalNotification.toString()) else remove(rnKey)
         if (config.dismissWithOriginal != null) save(dwoKey, config.dismissWithOriginal.toString()) else remove(dwoKey)
         if (config.enableInlineReply != null) save(eirKey, config.enableInlineReply.toString()) else remove(eirKey)
+    }
+
+    // --- COOLDOWN: one app's row, in the island group's exact shape ---
+
+    /** The per-app cooldown row, in the island group's exact shape. */
+    fun getAppCooldownOptions(packageName: String): Flow<CooldownOptions> {
+        val flows = CooldownPreferenceCodec.FIELDS.map { field ->
+            dao.getSettingFlow(CooldownPreferenceKeys.app(packageName, field))
+        }
+        return combine(flows) { values ->
+            CooldownPreferenceCodec.decode(
+                CooldownPreferenceCodec.FIELDS.mapIndexed { i, field -> field to values[i] }
+                    .filter { it.second != null }
+                    .associate { it.first to it.second!! },
+            )
+        }
+    }
+
+    suspend fun updateAppCooldownOptions(packageName: String, options: CooldownOptions) {
+        val encoded = CooldownPreferenceCodec.encode(options)
+        CooldownPreferenceCodec.FIELDS.forEach { field ->
+            val key = CooldownPreferenceKeys.app(packageName, field)
+            val value = encoded[field]
+            if (value != null) save(key, value) else remove(key)
+        }
     }
 
     // --- NAVIGATION ---
@@ -566,6 +623,35 @@ class AppPreferences(context: Context) {
             memoryCache[SettingsKeys.GLOBAL_ENABLE_INLINE_REPLY]?.toBooleanStrictOrNull()
         )
     }
+
+    // --- COOLDOWN: the callback thread's mirrors ---
+
+    /**
+     * The callback thread's view of one app's cooldown options. Reads [memoryCache] rather than Room,
+     * in the shape of [getAppIslandConfigSync] — a suspending read on the post path is what this
+     * avoids, and the two are kept in sync by hand, exactly as the host does it.
+     */
+    fun getAppCooldownOptionsSync(packageName: String): CooldownOptions =
+        CooldownPreferenceCodec.decode(
+            CooldownPreferenceCodec.FIELDS
+                .mapNotNull { field ->
+                    memoryCache[CooldownPreferenceKeys.app(packageName, field)]?.let { field to it }
+                }
+                .toMap(),
+        )
+
+    fun getCooldownGlobalSync(): CooldownOptions =
+        CooldownPreferenceCodec.decode(
+            CooldownPreferenceCodec.FIELDS
+                .mapNotNull { field ->
+                    memoryCache[CooldownPreferenceKeys.global(field)]?.let { field to it }
+                }
+                .toMap(),
+        )
+
+    /** One app's effective options: its row merged over the global row. */
+    fun getEffectiveCooldownOptionsSync(packageName: String): CooldownOptions =
+        getAppCooldownOptionsSync(packageName).mergeWith(getCooldownGlobalSync())
 
     fun getGlobalNavLayoutSync(): Pair<NavContent, NavContent> {
         val l = memoryCache[SettingsKeys.NAV_LEFT]
