@@ -111,6 +111,35 @@
             android:name=".receiver.InlineReplyReceiver"
             android:exported="false" />
 
+        <!-- Cooldown: the device harness. DUMP-guarded rather than exported=false, because adb shell
+             holds DUMP and every device criterion in the plan is one adb command; no ordinary app can
+             reach them. The listener is NOT declared here: the cooldown observes through the host's
+             own NotificationReaderService, and a second listener would be a second component racing
+             on the same events. -->
+        <receiver
+            android:name=".cooldown.act.SelfCheckReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.d4viddf.hyperbridge.action.SELF_CHECK" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Relaxations. Not exported: the only sender is this app's own PendingIntent. -->
+        <receiver
+            android:name=".cooldown.act.RelaxationReceiver"
+            android:exported="false" />
+
+        <!-- The panic path. DUMP-guarded so adb shell can pull it and no other app can. -->
+        <receiver
+            android:name=".cooldown.act.RestoreEverythingReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.d4viddf.hyperbridge.action.RESTORE_ALL" />
+            </intent-filter>
+        </receiver>
+
         <service
             android:name=".service.InlineReplyService"
             android:enabled="true"

@@ -1,0 +1,18 @@
+android.app.INotificationManager$Stub$Proxy.updateNotificationChannelForPackage:(Ljava/lang/String;ILandroid/app/NotificationChannel;)V
+const-string v2, "android.app.INotificationManager"
+const/16 v4, #int 42 // #2a
+invoke-interface {v3, v4, v0, v1, v2}, Landroid/os/IBinder;.transact:(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z
+android.app.INotificationManager$Stub$Proxy.unlockNotificationChannel:(Ljava/lang/String;ILjava/lang/String;)V
+const/16 v3, #int 43 // #2b
+invoke-interface {v2, v3, v0, v1, v4}, Landroid/os/IBinder;.transact:(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z
+android.app.INotificationManager$Stub$Proxy.updateNotificationChannelFromPrivilegedListener:(Landroid/service/notification/INotificationListener;Ljava/lang/String;Landroid/os/UserHandle;Landroid/app/NotificationChannel;)V
+const/16 v4, #int 97 // #61
+invoke-interface {v3, v4, v0, v1, v2}, Landroid/os/IBinder;.transact:(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z
+android.app.INotificationManager$Stub$Proxy.setNotificationListenerAccessGrantedForUser:(Landroid/content/ComponentName;IZZ)V
+const-string v2, "android.app.INotificationManager"
+const/16 v4, #int 117 // #75
+invoke-interface {v3, v4, v0, v1, v2}, Landroid/os/IBinder;.transact:(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z
+android.app.INotificationManager$Stub.TRANSACTION_setNotificationListenerAccessGrantedForUser:I
+value 117
+android.app.INotificationManager$Stub.onTransact:case 117 -> 0x683
+calls android.app.INotificationManager$Stub;.setNotificationListenerAccessGrantedForUser:(Landroid/content/ComponentName;IZZ)V
