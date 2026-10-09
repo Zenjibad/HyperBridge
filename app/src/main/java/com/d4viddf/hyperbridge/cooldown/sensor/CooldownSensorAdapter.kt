@@ -23,12 +23,25 @@ class CooldownSensorAdapter(
     private val currentUserId: Int = Process.myUserHandle().hashCode(),
     private val mapper: AndroidChannelMapper = AndroidChannelMapper(),
     private val onAlert: (AlertEvent) -> Unit,
+    private val onUserInteraction: (String) -> Unit,
 ) {
 
     /** Called above every early return in the host's `onNotificationPosted`. */
     fun onPosted(sbn: StatusBarNotification?, rankingMap: RankingMap?) {
         val event = alertEvent(sbn, rankingMap) ?: return
         onAlert(event)
+    }
+
+    /** The removal-side signal: a tap is a user interaction (AOSP's `onUserInteraction`). */
+    fun onRemoved(sbn: StatusBarNotification?, reason: Int) {
+        if (sbn == null) return
+        if (!CooldownClicks.isUserInteraction(reason)) return
+        CooldownClicks.keyForClick(sbn.key, ownPackage)?.let(onUserInteraction)
+    }
+
+    /** The island's own click, which never surfaces as `REASON_CLICK` (see `CooldownClicks`). */
+    fun onIslandClicked(sbnKey: String?) {
+        CooldownClicks.keyForClick(sbnKey ?: "", ownPackage)?.let(onUserInteraction)
     }
 
     /** The pure normalisation's Android half. Returns null when this post is not an alert to damp. */

@@ -19,7 +19,8 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.d4viddf.hyperbridge.MainActivity
 import com.d4viddf.hyperbridge.R
-import com.d4viddf.hyperbridge.cooldown.sensor.CooldownClicks
+import com.d4viddf.hyperbridge.cooldown.act.CooldownRuntime
+import com.d4viddf.hyperbridge.cooldown.act.ListenerWatchdog
 import com.d4viddf.hyperbridge.cooldown.sensor.CooldownSensorAdapter
 import com.d4viddf.hyperbridge.data.AppPreferences
 import com.d4viddf.hyperbridge.data.db.AppDatabase
@@ -142,14 +143,16 @@ class NotificationReaderService : NotificationListenerService() {
     }
 
     /**
-     * [COOLDOWN] A tap is a user interaction, and AOSP's reset must hear it. The cooldown's writer is
-     * Task 7's runtime; until then the signal is logged, which is what the A7 device run greps for.
+     * [COOLDOWN] A tap is a user interaction, and AOSP's reset must hear it. Both signals this host
+     * can produce — a `REASON_CLICK` removal and the island's own `ISLAND_CLICKED` broadcast — arrive
+     * through [cooldownSensor], so this is handed to it at construction and never called directly.
      *
-     * Declared above [islandClickReceiver] because that receiver captures it (`:163`), and a property
-     * read from an earlier initializer would see the default.
+     * Declared above [islandClickReceiver] because that receiver captures it (`:163`), and `by lazy`
+     * because the runtime it forwards to is built on the same construction path: laziness removes the
+     * initialisation-order question rather than relying on it.
      */
-    private val cooldownOnInteraction: (String) -> Unit = { key ->
-        Log.d("CooldownSensor", "user interaction key=$key")
+    private val cooldownOnInteraction: (String) -> Unit by lazy {
+        { key: String -> cooldownRuntime.onUserInteraction(key) }
     }
 
     private val islandClickReceiver = object : BroadcastReceiver() {
@@ -160,7 +163,7 @@ class NotificationReaderService : NotificationListenerService() {
                 // [COOLDOWN] The island's half of the tap. The platform's REASON_CLICK never arrives
                 // for a tap HyperBridge intercepted, and this broadcast carries the ORIGIN's key
                 // (`:1113`), which is exactly the key the reset belongs to.
-                CooldownClicks.keyForClick(sbnKey ?: "")?.let { cooldownOnInteraction(it) }
+                cooldownSensor?.onIslandClicked(sbnKey)
 
                 val bridgeId = intent.getIntExtra("bridge_id", -1)
                 @Suppress("DEPRECATION")
@@ -209,13 +212,8 @@ class NotificationReaderService : NotificationListenerService() {
         // plan, which is what keeps the two-writer question from being pre-empted here.
         cooldownSensor = CooldownSensorAdapter(
             ownPackage = packageName,
-            onAlert = { event ->
-                Log.d(
-                    "CooldownSensor",
-                    "event key=${event.target.key} channel=${event.snapshot.fields.channelId} " +
-                        "audibleAt=${event.rankingLastAudiblyAlertedMs}",
-                )
-            },
+            onAlert = { event -> cooldownRuntime.onAlert(event) },
+            onUserInteraction = cooldownOnInteraction,
         )
 
         // [INIT] Theme Engine
@@ -416,10 +414,10 @@ class NotificationReaderService : NotificationListenerService() {
     override fun onNotificationRemoved(sbn: StatusBarNotification?, rankingMap: RankingMap?, reason: Int) {
         // [COOLDOWN] The platform's half of the tap, above every early return below: the tap may be on
         // another app's notification, which the host's own bookkeeping (`:444`/`:447`) never reaches.
-        // `keyForRemoval` is the arbitration, so one tap counts once: a cancel — including the one
+        // `onRemoved` is the arbitration, so one tap counts once: a cancel — including the one
         // `islandClickReceiver` performs on the origin (`:178`) — names nothing, and our own island is
         // never attributed to the origin it stands for.
-        CooldownClicks.keyForRemoval(sbn?.key, reason)?.let { cooldownOnInteraction(it) }
+        cooldownSensor?.onRemoved(sbn, reason)
         sbn?.let {
             if (nativeIslands.remove(it.key)) {
                 updatePermanentIsland()
@@ -638,6 +636,13 @@ class NotificationReaderService : NotificationListenerService() {
      * listener: this is the host's own `NotificationReaderService`, with one more consumer.
      */
     private var cooldownSensor: CooldownSensorAdapter? = null
+
+    /**
+     * The cooldown's writer. `CooldownRuntime.get` is a process-wide singleton whose store is on disk,
+     * so a runtime rebuilt on every service create would re-read the same file; this mirrors how the
+     * standalone app holds it (`NotificationSensor.kt:32`, a `by lazy`).
+     */
+    private val cooldownRuntime by lazy { CooldownRuntime.get(applicationContext) }
 
     @RequiresPermission(Manifest.permission.POST_NOTIFICATIONS)
     override fun onNotificationPosted(sbn: StatusBarNotification?, rankingMap: RankingMap?) {
@@ -1299,6 +1304,14 @@ class NotificationReaderService : NotificationListenerService() {
     private var syncJob: Job? = null
 
     override fun onListenerConnected() { 
+        // [COOLDOWN] The bind state is recorded FIRST, because the runtime's own connect line prints
+        // the capability report and `NOTIFICATION_CONNECTED` must not read false beside the words
+        // "listener connected". Then the reconciliation pass: after a reboot, a process kill or a
+        // Shizuku restart this is what puts every damped channel back, and the host's boot path
+        // deliberately disables and re-enables the component (`receiver/BootReceiver.kt:92-108`),
+        // which drops the bind -- so this runs on EVERY connect, not once at boot.
+        ListenerWatchdog.onConnected()
+        cooldownRuntime.onListenerConnected(this)
         Log.i(TAG, "HyperBridge Service Connected")
         syncNotifications(refresh = true)
         syncJob?.cancel()
@@ -1420,7 +1433,36 @@ class NotificationReaderService : NotificationListenerService() {
         }
     }
 
+    override fun onListenerDisconnected() {
+        // [COOLDOWN] Recorded before the restore, which probes and logs: once this callback has run,
+        // this process may not claim to be connected any more.
+        ListenerWatchdog.onDisconnected()
+        // The writer is going away, so nothing may stay damped (invariant 1). This call is the one
+        // that restores: `CooldownRuntime.onListenerDisconnected` runs `restoreAll("listener
+        // disconnected")` and clears the privileged-listener holder, and it is called ONCE. Calling
+        // `restoreAll` again beside it would write every outstanding channel back twice.
+        cooldownRuntime.onListenerDisconnected()
+        // The framework's own recovery hook, and the one place the API says `requestRebind` is safe:
+        // the service is still alive for this callback. It is a no-op when the reason for the
+        // disconnect was the user revoking access, because the verdict is NOT_ALLOWED then.
+        ListenerWatchdog.ensureBound(this, "listener disconnected")
+        super.onListenerDisconnected()
+    }
+
+    /**
+     * The service is gone, so the bind is gone, whatever else did or did not arrive first.
+     *
+     * **No restore here, on purpose.** The standalone sensor's `onDestroy` records the tracker loss and
+     * stops; a restore needs the binder, and a service being destroyed is exactly where the binder is
+     * about to be gone. Reconciliation on the next `onListenerConnected` is what covers the case where
+     * neither callback arrives (a process kill delivers neither).
+     *
+     * The host's own teardown is unchanged: this override replaces a plain `onDestroy`, and dropping
+     * `unregisterReceiver(systemReceiver)`, `syncJob?.cancel()` or `serviceScope.cancel()` would leak a
+     * receiver and two jobs per service restart.
+     */
     override fun onDestroy() {
+        ListenerWatchdog.onDisconnected()
         super.onDestroy()
         unregisterReceiver(systemReceiver)
         unregisterReceiver(islandClickReceiver)
