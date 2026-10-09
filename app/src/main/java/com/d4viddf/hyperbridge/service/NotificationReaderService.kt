@@ -19,6 +19,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.d4viddf.hyperbridge.MainActivity
 import com.d4viddf.hyperbridge.R
+import com.d4viddf.hyperbridge.cooldown.sensor.CooldownClicks
 import com.d4viddf.hyperbridge.cooldown.sensor.CooldownSensorAdapter
 import com.d4viddf.hyperbridge.data.AppPreferences
 import com.d4viddf.hyperbridge.data.db.AppDatabase
@@ -140,10 +141,27 @@ class NotificationReaderService : NotificationListenerService() {
         }
     }
 
+    /**
+     * [COOLDOWN] A tap is a user interaction, and AOSP's reset must hear it. The cooldown's writer is
+     * Task 7's runtime; until then the signal is logged, which is what the A7 device run greps for.
+     *
+     * Declared above [islandClickReceiver] because that receiver captures it (`:163`), and a property
+     * read from an earlier initializer would see the default.
+     */
+    private val cooldownOnInteraction: (String) -> Unit = { key ->
+        Log.d("CooldownSensor", "user interaction key=$key")
+    }
+
     private val islandClickReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action == "com.d4viddf.hyperbridge.ISLAND_CLICKED") {
                 val sbnKey = intent.getStringExtra("sbn_key")
+
+                // [COOLDOWN] The island's half of the tap. The platform's REASON_CLICK never arrives
+                // for a tap HyperBridge intercepted, and this broadcast carries the ORIGIN's key
+                // (`:1113`), which is exactly the key the reset belongs to.
+                CooldownClicks.keyForClick(sbnKey ?: "")?.let { cooldownOnInteraction(it) }
+
                 val bridgeId = intent.getIntExtra("bridge_id", -1)
                 @Suppress("DEPRECATION")
                 val originalIntent = intent.getParcelableExtra<PendingIntent>("original_intent")
@@ -396,6 +414,12 @@ class NotificationReaderService : NotificationListenerService() {
     // =========================================================================
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?, rankingMap: RankingMap?, reason: Int) {
+        // [COOLDOWN] The platform's half of the tap, above every early return below: the tap may be on
+        // another app's notification, which the host's own bookkeeping (`:444`/`:447`) never reaches.
+        // `keyForRemoval` is the arbitration, so one tap counts once: a cancel — including the one
+        // `islandClickReceiver` performs on the origin (`:178`) — names nothing, and our own island is
+        // never attributed to the origin it stands for.
+        CooldownClicks.keyForRemoval(sbn?.key, reason)?.let { cooldownOnInteraction(it) }
         sbn?.let {
             if (nativeIslands.remove(it.key)) {
                 updatePermanentIsland()
