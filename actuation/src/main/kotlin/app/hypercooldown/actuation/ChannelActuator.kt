@@ -124,9 +124,28 @@ class ChannelActuator(
                         "and the record of its original is gone",
                 )
             }
+            // The same refusal, per *field*, for the vibration half — see [dampedVibration]. The check
+            // above is whole-`ChannelFields` equality against a marker that a stand-down empties, so it
+            // misses the case this platform produces constantly: an origin app that republishes its own
+            // sound (a new `content://media/external/media/…` row per process) leaves the pattern this
+            // app wrote on the channel with nothing left that remembers writing it. Taking *that* as
+            // the pristine source is 0.30 of a value that is already 0.30 — the vibration half of the
+            // defect `9d92f12` fixed for the sound, and the reason `AttenuatedSoundFactory.sourceOf`
+            // consults a registry rather than trusting the snapshot it is handed.
+            if (isDampingPayloadWeWrote(target.key, observed.fields)) {
+                return WriteResult.Failed(
+                    "refusing to damp ${target.key}: the channel carries a vibration this app wrote " +
+                        "and the record of its original is gone",
+                )
+            }
             store.record(target, observed)
         }
-        return write(target, store.snapshotFor(target.key)!!.snapshot, desired)
+        return write(
+            target,
+            store.snapshotFor(target.key)!!.snapshot,
+            desired,
+            damping = state != CooldownState.DEFAULT,
+        )
     }
 
     /** Applies [state] for a key whose snapshot is already recorded — the relaxation path. */
@@ -134,7 +153,7 @@ class ChannelActuator(
         quarantineOf(key)?.let { return refusal(it.key, it.reason) }
         val record = store.snapshotFor(key) ?: return WriteResult.Ok
         val desired = EditFactory.editFor(record.snapshot, state, config, politeSound)
-        return write(record.target, record.snapshot, desired)
+        return write(record.target, record.snapshot, desired, damping = state != CooldownState.DEFAULT)
     }
 
     /**
@@ -246,7 +265,12 @@ class ChannelActuator(
     /** The gaps recorded the last time the transport accepted a write for [key]. */
     fun lastGaps(key: String): Set<FidelityGap> = written[key]?.gaps ?: emptySet()
 
-    private fun write(target: ChannelTarget, snapshot: ChannelSnapshot, edit: ChannelEdit): WriteResult {
+    private fun write(
+        target: ChannelTarget,
+        snapshot: ChannelSnapshot,
+        edit: ChannelEdit,
+        damping: Boolean,
+    ): WriteResult {
         val result = transport.write(target, snapshot, edit)
         if (result == WriteResult.Ok) {
             // What the channel contains, not what we asked for. The platform normalises as it stores —
@@ -260,7 +284,69 @@ class ChannelActuator(
             // Persisted on the same principle as the snapshot: the next process has to be able to
             // tell our own damping write from somebody else's change (spec §6).
             store.markWritten(target.key, content)
+            if (damping) rememberDampingPayload(target.key, snapshot.fields, content)
         }
         return result
+    }
+
+    /**
+     * Every vibration **payload this app produced** for a key — a pattern or an effect the pristine
+     * snapshot did not already carry — for as long as this process lives.
+     *
+     * This is the vibration half of `SoundCopyCache`'s registry, and it exists because the marker above
+     * is not enough on its own. `written` is dropped the moment a channel stops being ours to damp
+     * ([standDown] drops it for a channel somebody else made audible) and it is whole-`ChannelFields`
+     * equality, so an origin app that changes any *other* field of its own channel — on this device, its
+     * sound, republished as a new `content://media/external/media/…` row by every process — hides the
+     * fact that the vibration on it is still ours. The next alert then records that pattern as the
+     * pristine original and scales it again: 0.30 x 0.30 = 9 %, the vibration's copy of the defect
+     * `9d92f12` fixed for the sound.
+     *
+     * Deliberately **not** cleared by [restore], [forget] or [standDown]: surviving exactly those is the
+     * point, and it is why it cannot be folded into `written` (which must be emptied on a restore, or a
+     * channel we put back would read as our own damping forever). Values the pristine snapshot already
+     * carried are never remembered — a restore, a relaxation and an unscalable POLITE all re-write
+     * content the user already had, and refusing *that* as a source would refuse to damp a pristine
+     * channel. Only payloads are remembered: MUTED's "no pattern, no effect, vibration off" is a state
+     * any channel can be in without this app, and there is nothing in it to rescale.
+     *
+     * Bounded per key at [REMEMBERED_DAMPING] values, one of which is the one a channel carries.
+     */
+    private val dampedVibration = HashMap<String, MutableSet<Vibration>>()
+
+    private fun rememberDampingPayload(key: String, pristine: ChannelFields, content: ChannelFields) {
+        val wrote = Vibration.of(content)
+        if (!wrote.carriesPayload) return
+        if (wrote == Vibration.of(pristine)) return
+        val remembered = dampedVibration.getOrPut(key) { LinkedHashSet() }
+        remembered += wrote
+        while (remembered.size > REMEMBERED_DAMPING) remembered.remove(remembered.first())
+    }
+
+    /** Whether [observed]'s vibration is a payload this app produced and the user's original is gone. */
+    private fun isDampingPayloadWeWrote(key: String, observed: ChannelFields): Boolean {
+        val present = Vibration.of(observed)
+        if (!present.carriesPayload) return false
+        return dampedVibration[key]?.contains(present) == true
+    }
+
+    /** The vibration half of a content: the three fields a damping write can be recognised by. */
+    private data class Vibration(
+        val pattern: List<Long>?,
+        val effectBytes: String?,
+        val enabled: Boolean,
+    ) {
+        /** Whether there is anything here to rescale — a pattern or an effect, not merely "off". */
+        val carriesPayload: Boolean get() = pattern != null || effectBytes != null
+
+        companion object {
+            fun of(fields: ChannelFields): Vibration =
+                Vibration(fields.vibrationPattern, fields.vibrationEffectBytes, fields.vibrationEnabled)
+        }
+    }
+
+    private companion object {
+        /** How many of a key's own damping payloads are remembered; one is what the channel carries. */
+        const val REMEMBERED_DAMPING = 8
     }
 }

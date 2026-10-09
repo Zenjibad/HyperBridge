@@ -173,6 +173,96 @@ class DerivedVibrationEffectTest {
     }
 
     /**
+     * The vibration half of `AttenuatedSoundFactoryTest > a prewarm handed a copy this factory published
+     * is refused at the origin`, on the path this platform actually takes.
+     *
+     * The sound's source is guarded per *field*: `SoundCopyCache` remembers every copy this process
+     * published and `sourceOf` refuses one as a source, whatever snapshot it arrives in. The vibration's
+     * source had only the whole-`ChannelFields` comparison against the in-process "what I last wrote"
+     * map — and a stand-down *empties* that map (`ChannelActuator.standDown` drops the record and the
+     * marker for a channel somebody else made audible). So an origin app that changes any *other* field
+     * of its own channel — its sound, which on this device is republished as a new MediaStore row by
+     * every process — leaves the scaled pattern this app wrote on the channel with nothing left that
+     * remembers writing it, and the next alert re-records it as "the pristine original" and scales it
+     * again: 0.30 x 0.30 = 9 %. Measured on the device as the record's `written.vibrationPattern` and
+     * the channel's `mVibrationPattern` disagreeing (decision record §8).
+     */
+    @Test
+    fun `a pattern this app wrote is never taken as the pristine source`() {
+        val pristine = observed()
+        val pattern = requireNotNull(pristine.fields.vibrationPattern)
+        assertEquals(WriteResult.Ok, actuator.apply(target, pristine, CooldownState.POLITE))
+        val damped = observed()
+        assertEquals(
+            onceScaled(pattern),
+            damped.fields.vibrationPattern,
+            "premise: our own scaled pattern is what the channel carries",
+        )
+
+        // The origin app re-creates its own channel with a different sound. That is its change, not
+        // ours, so the episode stands down — which drops the record *and* this process's marker, while
+        // the scaled pattern we wrote stays on the channel.
+        device.write(target, damped, ChannelEdit(fields = damped.fields.copy(soundUri = OTHER_SOUND)))
+        val foreign = observed()
+        assertEquals(WriteResult.Ok, actuator.standDown(target.key, foreign))
+        assertNull(store.snapshotFor(target.key), "premise: the stand-down dropped the record")
+
+        val result = actuator.apply(target, foreign, CooldownState.POLITE)
+
+        assertTrue(
+            result is WriteResult.Failed,
+            "a pattern this app wrote was taken as the pristine source and scaled again: $result",
+        )
+        assertNull(
+            store.snapshotFor(target.key),
+            "our own 30 % pattern was recorded as the user's original",
+        )
+        assertEquals(foreign.fields, observed().fields, "and nothing was written over it")
+    }
+
+    /**
+     * The same defect end to end, through the coordinator: two consecutive episodes must leave the
+     * amplitude where it was, never at 9 %.
+     *
+     * The sound half of this is pinned by `AttenuatedSoundFactoryTest > two consecutive prewarms for one
+     * key leave the attenuated peak where it was` (peak 6497 -> 1949 before the fix). This is the
+     * vibration's: episode 1 installs POLITE's 0.30, the origin moves its own sound, and episode 2 —
+     * arriving on a channel with no record, carrying the pattern this app wrote — must not scale it a
+     * second time.
+     */
+    @Test
+    fun `two consecutive episodes leave the vibration amplitude where it was, never 9 percent`() {
+        val original = observed()
+        val pattern = requireNotNull(original.fields.vibrationPattern)
+
+        post(0L)
+        assertEquals(
+            onceScaled(pattern),
+            observed().fields.vibrationPattern,
+            "episode 1 did not install POLITE's 0.30",
+        )
+
+        val damped = observed()
+        device.write(target, damped, ChannelEdit(fields = damped.fields.copy(soundUri = OTHER_SOUND)))
+        // The stand-down episode: the channel carries a change that is not ours.
+        post(10_000L)
+        assertNull(store.snapshotFor(target.key), "premise: the stand-down dropped the record")
+
+        post(20_000L)
+
+        assertEquals(
+            onceScaled(pattern),
+            observed().fields.vibrationPattern,
+            "0.30 of the user's pattern, twice at most and never 0.30 then 0.09",
+        )
+        assertEquals(
+            OTHER_SOUND,
+            observed().fields.soundUri,
+            "and the app's own sound change is not written over",
+        )
+    }
+
+    /**
      * Spec §6's safety property, re-verified against this platform rather than assumed: a record is
      * cleared only by a restore write that came back `Ok`, and a restore that failed leaves the record
      * exactly where it is.
@@ -199,5 +289,11 @@ class DerivedVibrationEffectTest {
 
         /** Far enough apart that one episode cannot see the previous one's alarm deadlines. */
         const val EPISODE_GAP_MS = 1_000_000L
+
+        /**
+         * A second published copy of the same sound, as this device produces: `mVibrationPattern` stays
+         * ours while `mSound` moves to the next `content://media/external/audio/media/…` row.
+         */
+        const val OTHER_SOUND = "content://media/external/audio/media/8562"
     }
 }
