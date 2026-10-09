@@ -24,4 +24,9 @@ dependencyResolutionManagement {
 
 rootProject.name = "Hyper Bridge"
 include(":app")
+
+// Vendored, byte-for-byte, from the standalone cooldown app. Pure Kotlin/JVM, no Android
+// dependency, and they must not acquire one.
+include(":engine")
+include(":actuation")
  
