@@ -13,28 +13,37 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.DoNotDisturbOn
-import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.NotificationsActive
+import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VolumeOff
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
+import app.hypercooldown.actuation.CooldownOptionBounds
 import app.hypercooldown.actuation.CooldownOptions
 import app.hypercooldown.actuation.HeadsUpOption
 import app.hypercooldown.actuation.IslandOption
@@ -58,11 +67,21 @@ import kotlinx.coroutines.launch
  * has one (`AppListViewModel` and `ThemeViewModel` are the only two, and neither is a settings
  * screen) -- and no DI container, because the host has none.
  *
- * Every row offers the AOSP treatment first, so parity is the baseline and a deviation is a
- * deliberate act (spec 4.2). The two risky rows are separate rows and are never one switch with two
- * names, and the heads-up rows cannot be turned on until the warning beside them is acknowledged:
- * `CooldownPolicy.presentation` refuses an unacknowledged `SUPPRESS` and reports a note, and the rows
- * here refuse to let the user set one in the first place.
+ * **The screen's job is to say what the feature does, in the user's words.** The phases were named
+ * after AOSP's internals (`POLITE`, `MUTED`, "cooldown") and the numbers were offered as three
+ * radio buttons; both are fixed here. Three rules, and they are the whole of Part B:
+ *
+ *  1. every control carries one plain sentence about **what the user will experience**, not what the
+ *     implementation does;
+ *  2. the sequence is stated once, in order, before any switch -- and the one line that depends on the
+ *     current numbers is *derived from them* (`CooldownOptionBounds.describeSequence`), so it cannot
+ *     describe a window the settings do not;
+ *  3. the values are editable and validated, with AOSP's own value shown as a described preset: a
+ *     value the user typed is never silently clamped, and an entry that is out of range says so.
+ *
+ * The honest costs are on the rows they belong to and not in a footnote: the island's option is free
+ * of channel writes and says so, and the heads-up option's demotion is stated where the switch is,
+ * with no acknowledgement gate in front of it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -78,11 +97,14 @@ fun CooldownSettingsScreen(onBack: () -> Unit) {
                 title = { Text(stringResource(R.string.cooldown_title)) },
                 navigationIcon = {
                     FilledTonalIconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back))
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = null,
+                        )
                     }
-                }
+                },
             )
-        }
+        },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -95,8 +117,6 @@ fun CooldownSettingsScreen(onBack: () -> Unit) {
 
             CooldownStatusCard(runtime = CooldownRuntime.get(context))
 
-            Spacer(Modifier.height(16.dp))
-
             CooldownOptionsEditor(
                 options = global,
                 onUpdate = { updated -> scope.launch { preferences.updateCooldownGlobal(updated) } }
@@ -108,9 +128,9 @@ fun CooldownSettingsScreen(onBack: () -> Unit) {
 }
 
 /**
- * The whole option surface of Task 4, as rows. Shared with the per-app sheet, where the same options
- * are one app's overrides rather than the global row -- which is the host's own idiom, not a
- * cooldown invention (`AppearanceSettingsContent` shows the island's options in both places).
+ * The whole option surface, as rows. Shared with the per-app sheet, where the same options are one
+ * app's overrides rather than the global row -- which is the host's own idiom, not a cooldown
+ * invention (`AppearanceSettingsContent` shows the island's options in both places).
  */
 @Composable
 fun CooldownOptionsEditor(
@@ -118,14 +138,22 @@ fun CooldownOptionsEditor(
     onUpdate: (CooldownOptions) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // The acknowledgement is read from the stored option rather than held in local state: the policy
-    // layer is what refuses an unacknowledged suppress, so a screen that shadowed the option in
-    // `remember` could show "acknowledged" while the writer still refused.
-    val acknowledged = options.headsUpSuppressionAcknowledged == true
+    // Read from the stored option, not from local state: this is one preference shared by the global
+    // row and every per-app row, and a `remember`ed copy would let one screen hide the note while the
+    // other still showed it.
+    val noteRead = options.headsUpSuppressionAcknowledged == true
     val context = LocalContext.current
     val runtime = remember { CooldownRuntime.get(context.applicationContext) }
 
     Column(modifier = modifier.fillMaxWidth()) {
+        Text(
+            text = stringResource(R.string.cooldown_lead),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Spacer(Modifier.height(16.dp))
+
         SettingsToggleCard(
             title = stringResource(R.string.cooldown_enable_title),
             subtitle = stringResource(R.string.cooldown_enable_subtitle),
@@ -141,15 +169,48 @@ fun CooldownOptionsEditor(
 
         Spacer(Modifier.height(16.dp))
 
-        // ---- Sound and vibration: one row per effect per state, never one row for two states ----
+        // ---- The sequence, once, in order, before any switch. The one line that depends on the
+        // numbers is derived from them. ----
         ExpandableSettingCard(
-            title = stringResource(R.string.cooldown_section_sound),
-            icon = Icons.Outlined.VolumeOff
+            title = stringResource(R.string.cooldown_sequence_title),
+            icon = Icons.Outlined.Speed,
+        ) {
+            Column {
+                SequenceRow(stringResource(R.string.cooldown_sequence_first))
+                SequenceRow(stringResource(R.string.cooldown_sequence_quieter))
+                SequenceRow(stringResource(R.string.cooldown_sequence_silent))
+                SequenceRow(stringResource(R.string.cooldown_sequence_recover))
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(
+                        R.string.cooldown_value_is,
+                        CooldownOptionBounds.describeSequence(
+                            timeoutPoliteMs = options.timeoutPoliteMs
+                                ?: CooldownNumberText.defaultTimeoutPoliteMs,
+                            timeoutMutedMs = options.timeoutMutedMs
+                                ?: CooldownNumberText.defaultTimeoutMutedMs,
+                            factor = options.attenuationFactor
+                                ?.takeIf { it in CooldownOptionBounds.ATTENUATION_RANGE }
+                                ?: CooldownNumberText.defaultFactor,
+                        ),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // ---- What each phase does. One row per effect per phase, never one row for two phases. ----
+        ExpandableSettingCard(
+            title = stringResource(R.string.cooldown_section_alert),
+            icon = Icons.Outlined.VolumeOff,
         ) {
             Column {
                 SettingsToggleCard(
-                    title = stringResource(R.string.cooldown_sound_polite_title),
-                    subtitle = stringResource(R.string.cooldown_sound_polite_subtitle),
+                    title = stringResource(R.string.cooldown_quieter_sound_title),
+                    subtitle = stringResource(R.string.cooldown_quieter_sound_subtitle),
                     icon = Icons.Outlined.VolumeOff,
                     checked = options.soundPolite == SoundOption.SILENT,
                     shape = getExpressiveShape(4, 0, ShapeStyle.Large),
@@ -163,8 +224,8 @@ fun CooldownOptionsEditor(
                 )
                 Spacer(Modifier.height(2.dp))
                 SettingsToggleCard(
-                    title = stringResource(R.string.cooldown_sound_muted_title),
-                    subtitle = stringResource(R.string.cooldown_sound_muted_subtitle),
+                    title = stringResource(R.string.cooldown_silent_sound_title),
+                    subtitle = stringResource(R.string.cooldown_silent_sound_subtitle),
                     icon = Icons.Outlined.VolumeOff,
                     checked = options.soundMuted == SoundOption.SILENT,
                     shape = getExpressiveShape(4, 1, ShapeStyle.Large),
@@ -178,8 +239,8 @@ fun CooldownOptionsEditor(
                 )
                 Spacer(Modifier.height(2.dp))
                 SettingsToggleCard(
-                    title = stringResource(R.string.cooldown_vibration_polite_title),
-                    subtitle = stringResource(R.string.cooldown_vibration_polite_subtitle),
+                    title = stringResource(R.string.cooldown_quieter_vibration_title),
+                    subtitle = stringResource(R.string.cooldown_quieter_vibration_subtitle),
                     icon = Icons.Outlined.DoNotDisturbOn,
                     checked = options.vibrationPolite == VibrationOption.OFF,
                     shape = getExpressiveShape(4, 2, ShapeStyle.Large),
@@ -194,8 +255,8 @@ fun CooldownOptionsEditor(
                 )
                 Spacer(Modifier.height(2.dp))
                 SettingsToggleCard(
-                    title = stringResource(R.string.cooldown_vibration_muted_title),
-                    subtitle = stringResource(R.string.cooldown_vibration_muted_subtitle),
+                    title = stringResource(R.string.cooldown_silent_vibration_title),
+                    subtitle = stringResource(R.string.cooldown_silent_vibration_subtitle),
                     icon = Icons.Outlined.DoNotDisturbOn,
                     checked = options.vibrationMuted == VibrationOption.OFF,
                     shape = getExpressiveShape(4, 3, ShapeStyle.Large),
@@ -213,84 +274,167 @@ fun CooldownOptionsEditor(
 
         Spacer(Modifier.height(16.dp))
 
-        // ---- The attenuation factor: a channel's sound is replaced by a scaled copy of itself ----
+        // ---- How much quieter: an editable number, with Android's value as a described preset. ----
         ExpandableSettingCard(
-            title = stringResource(R.string.cooldown_factor_title),
-            icon = Icons.Outlined.Memory,
-            subtitle = stringResource(R.string.cooldown_factor_subtitle)
-        ) {
-            ChoiceGroup(
-                title = stringResource(R.string.cooldown_factor_choice_title),
-                subtitle = stringResource(R.string.cooldown_factor_choice_subtitle),
-                current = options.attenuationFactor,
-                choices = listOf(
-                    Choice(null, stringResource(R.string.cooldown_factor_aosp), stringResource(R.string.cooldown_factor_aosp_desc)),
-                    Choice(0.5f, "50 %", stringResource(R.string.cooldown_factor_50_desc)),
-                    Choice(0.1f, "10 %", stringResource(R.string.cooldown_factor_10_desc))
-                ),
-                onSelect = { onUpdate(options.copy(attenuationFactor = it)) }
-            )
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        // ---- Timing. AOSP's values are the defaults and are labelled as such ----
-        ExpandableSettingCard(
-            title = stringResource(R.string.cooldown_section_timing),
-            icon = Icons.Outlined.Timer
+            title = stringResource(R.string.cooldown_volume_title),
+            icon = Icons.Outlined.Speed,
+            subtitle = stringResource(R.string.cooldown_volume_subtitle),
         ) {
             Column {
-                ChoiceGroup(
-                    title = stringResource(R.string.cooldown_timing_polite_title),
-                    subtitle = stringResource(R.string.cooldown_timing_polite_subtitle),
-                    current = options.timeoutPoliteMs,
-                    choices = listOf(
-                        Choice(null, stringResource(R.string.cooldown_timing_aosp_60), stringResource(R.string.cooldown_timing_polite_60_desc)),
-                        Choice(30_000L, "30 s", stringResource(R.string.cooldown_timing_polite_30_desc)),
-                        Choice(120_000L, "120 s", stringResource(R.string.cooldown_timing_polite_120_desc))
-                    ),
-                    onSelect = { onUpdate(options.copy(timeoutPoliteMs = it)) }
+                NumberField(
+                    label = stringResource(R.string.cooldown_volume_label),
+                    option = options.attenuationFactor?.let { CooldownNumberText.percent(it) },
+                    fallback = CooldownNumberText.percent(CooldownNumberText.defaultFactor),
+                    parse = { text -> CooldownNumberText.toFactor(text) },
+                    describe = { factor -> CooldownOptionBounds.describeFactor(factor) },
+                    problemText = stringResource(R.string.cooldown_error_percent),
+                    onValue = { factor -> onUpdate(options.copy(attenuationFactor = factor)) },
                 )
-                Spacer(Modifier.height(12.dp))
-                ChoiceGroup(
-                    title = stringResource(R.string.cooldown_timing_muted_title),
-                    subtitle = stringResource(R.string.cooldown_timing_muted_subtitle),
-                    current = options.timeoutMutedMs,
-                    choices = listOf(
-                        Choice(null, stringResource(R.string.cooldown_timing_aosp_10), stringResource(R.string.cooldown_timing_muted_10_desc)),
-                        Choice(5_000L, "5 s", stringResource(R.string.cooldown_timing_muted_5_desc)),
-                        Choice(30_000L, "30 s", stringResource(R.string.cooldown_timing_muted_30_desc))
-                    ),
-                    onSelect = { onUpdate(options.copy(timeoutMutedMs = it)) }
+                Spacer(Modifier.height(8.dp))
+                PresetCard(
+                    title = stringResource(R.string.cooldown_volume_preset_aosp),
+                    description = stringResource(R.string.cooldown_volume_preset_aosp_desc),
+                    selected = options.attenuationFactor == null,
+                    onClick = { onUpdate(options.copy(attenuationFactor = null)) },
                 )
-                Spacer(Modifier.height(12.dp))
-                ChoiceGroup(
-                    title = stringResource(R.string.cooldown_counter_title),
-                    subtitle = stringResource(R.string.cooldown_counter_subtitle),
-                    current = options.counterReset,
-                    choices = listOf(
-                        Choice(null, stringResource(R.string.cooldown_counter_aosp), stringResource(R.string.cooldown_counter_aosp_desc)),
-                        Choice(5, "5", stringResource(R.string.cooldown_counter_5_desc)),
-                        Choice(20, "20", stringResource(R.string.cooldown_counter_20_desc))
-                    ),
-                    onSelect = { onUpdate(options.copy(counterReset = it)) }
+                Spacer(Modifier.height(8.dp))
+                PresetCard(
+                    title = stringResource(R.string.cooldown_volume_preset_50),
+                    description = stringResource(R.string.cooldown_volume_preset_50_desc),
+                    selected = options.attenuationFactor == 0.5f,
+                    onClick = { onUpdate(options.copy(attenuationFactor = 0.5f)) },
                 )
             }
         }
 
         Spacer(Modifier.height(16.dp))
 
-        // ---- The island: no channel write, so it is honoured without a gate -- but its realisation is
-        // visible, so the copy says what disappears. The cost is asymmetric with heads-up (nothing is
-        // written, nothing is locked), which is why this row is ungated; the earlier note here said the
-        // option "needs no warning", and that half is now falsified: realised as "post the notification
-        // and withhold the focus template", it surfaced the host's own `notification_went_wrong` body as
-        // a fault banner on 2026-10-10. Suppression is realised as *absent* instead (IslandRealisation),
-        // and the strings below say so. ----
+        // ---- Timing: seconds, with the seconds spelled out beside the field. ----
+        ExpandableSettingCard(
+            title = stringResource(R.string.cooldown_section_timing),
+            icon = Icons.Outlined.Timer,
+        ) {
+            Column {
+                SettingsLabel(
+                    title = stringResource(R.string.cooldown_timing_quieter_title),
+                    subtitle = stringResource(R.string.cooldown_timing_quieter_subtitle),
+                )
+                NumberField(
+                    label = stringResource(R.string.cooldown_timing_seconds_label),
+                    option = options.timeoutPoliteMs?.let { CooldownNumberText.seconds(it) },
+                    fallback = CooldownNumberText.seconds(CooldownNumberText.defaultTimeoutPoliteMs),
+                    parse = { text -> CooldownNumberText.toMillis(text) },
+                    describe = { ms -> CooldownOptionBounds.describeMs(ms) },
+                    problemText = stringResource(R.string.cooldown_error_seconds),
+                    onValue = { ms -> onUpdate(options.copy(timeoutPoliteMs = ms)) },
+                )
+                Spacer(Modifier.height(8.dp))
+                PresetCard(
+                    title = stringResource(R.string.cooldown_timing_preset_aosp_quieter),
+                    description = stringResource(R.string.cooldown_timing_preset_aosp_quieter_desc),
+                    selected = options.timeoutPoliteMs == null,
+                    onClick = { onUpdate(options.copy(timeoutPoliteMs = null)) },
+                )
+                Spacer(Modifier.height(8.dp))
+                PresetCard(
+                    title = stringResource(R.string.cooldown_timing_preset_30s),
+                    description = stringResource(R.string.cooldown_timing_preset_30s_desc),
+                    selected = options.timeoutPoliteMs == 30_000L,
+                    onClick = { onUpdate(options.copy(timeoutPoliteMs = 30_000L)) },
+                )
+                Spacer(Modifier.height(8.dp))
+                PresetCard(
+                    title = stringResource(R.string.cooldown_timing_preset_120s),
+                    description = stringResource(R.string.cooldown_timing_preset_120s_desc),
+                    selected = options.timeoutPoliteMs == 120_000L,
+                    onClick = { onUpdate(options.copy(timeoutPoliteMs = 120_000L)) },
+                )
+
+                Spacer(Modifier.height(16.dp))
+
+                SettingsLabel(
+                    title = stringResource(R.string.cooldown_timing_silent_title),
+                    subtitle = stringResource(R.string.cooldown_timing_silent_subtitle),
+                )
+                NumberField(
+                    label = stringResource(R.string.cooldown_timing_seconds_label),
+                    option = options.timeoutMutedMs?.let { CooldownNumberText.seconds(it) },
+                    fallback = CooldownNumberText.seconds(CooldownNumberText.defaultTimeoutMutedMs),
+                    parse = { text -> CooldownNumberText.toMillis(text) },
+                    describe = { ms -> CooldownOptionBounds.describeMs(ms) },
+                    problemText = stringResource(R.string.cooldown_error_seconds),
+                    onValue = { ms -> onUpdate(options.copy(timeoutMutedMs = ms)) },
+                )
+                Spacer(Modifier.height(8.dp))
+                PresetCard(
+                    title = stringResource(R.string.cooldown_timing_preset_aosp_silent),
+                    description = stringResource(R.string.cooldown_timing_preset_aosp_silent_desc),
+                    selected = options.timeoutMutedMs == null,
+                    onClick = { onUpdate(options.copy(timeoutMutedMs = null)) },
+                )
+                Spacer(Modifier.height(8.dp))
+                PresetCard(
+                    title = stringResource(R.string.cooldown_timing_preset_5s),
+                    description = stringResource(R.string.cooldown_timing_preset_5s_desc),
+                    selected = options.timeoutMutedMs == 5_000L,
+                    onClick = { onUpdate(options.copy(timeoutMutedMs = 5_000L)) },
+                )
+                Spacer(Modifier.height(8.dp))
+                PresetCard(
+                    title = stringResource(R.string.cooldown_timing_preset_30s_silent),
+                    description = stringResource(R.string.cooldown_timing_preset_30s_silent_desc),
+                    selected = options.timeoutMutedMs == 30_000L,
+                    onClick = { onUpdate(options.copy(timeoutMutedMs = 30_000L)) },
+                )
+
+                Spacer(Modifier.height(16.dp))
+
+                SettingsLabel(
+                    title = stringResource(R.string.cooldown_timing_reset_title),
+                    subtitle = stringResource(R.string.cooldown_timing_reset_subtitle),
+                )
+                NumberField(
+                    label = stringResource(R.string.cooldown_timing_count_label),
+                    option = options.counterReset?.let { CooldownNumberText.count(it) },
+                    fallback = CooldownNumberText.count(CooldownNumberText.defaultCounterReset),
+                    parse = { text -> CooldownNumberText.toCount(text) },
+                    describe = { count -> count.toString() },
+                    problemText = stringResource(R.string.cooldown_error_count),
+                    onValue = { count -> onUpdate(options.copy(counterReset = count)) },
+                )
+                Spacer(Modifier.height(8.dp))
+                PresetCard(
+                    title = stringResource(R.string.cooldown_timing_preset_aosp_reset),
+                    description = stringResource(R.string.cooldown_timing_preset_aosp_reset_desc),
+                    selected = options.counterReset == null,
+                    onClick = { onUpdate(options.copy(counterReset = null)) },
+                )
+                Spacer(Modifier.height(8.dp))
+                PresetCard(
+                    title = stringResource(R.string.cooldown_timing_preset_5),
+                    description = stringResource(R.string.cooldown_timing_preset_5_desc),
+                    selected = options.counterReset == 5,
+                    onClick = { onUpdate(options.copy(counterReset = 5)) },
+                )
+                Spacer(Modifier.height(8.dp))
+                PresetCard(
+                    title = stringResource(R.string.cooldown_timing_preset_20),
+                    description = stringResource(R.string.cooldown_timing_preset_20_desc),
+                    selected = options.counterReset == 20,
+                    onClick = { onUpdate(options.copy(counterReset = 20)) },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // ---- The island: no channel write, so nothing gates it -- and its realisation is visible, so
+        // the copy says what disappears. The cost is asymmetric with heads-up (nothing is written,
+        // nothing is locked), which is why this section carries no warning card. ----
         ExpandableSettingCard(
             title = stringResource(R.string.cooldown_section_island),
             icon = Icons.Outlined.NotificationsActive,
-            subtitle = stringResource(R.string.cooldown_island_free_note)
+            subtitle = stringResource(R.string.cooldown_island_free_note),
         ) {
             Column {
                 SettingsToggleCard(
@@ -329,39 +473,29 @@ fun CooldownOptionsEditor(
 
         Spacer(Modifier.height(16.dp))
 
-        // ---- Heads-up: a permanent, user-locked write, so the warning comes first ----
+        // ---- Heads-up: the honest cost first, then a normal toggle. No gate: the write is
+        // recoverable (transaction 43 releases the lock, and the restore sends it), so a separate
+        // acknowledgement that blocks the row would be a trap rather than a safeguard. ----
         ExpandableSettingCard(
             title = stringResource(R.string.cooldown_section_heads_up),
-            icon = Icons.Filled.Warning
+            icon = Icons.Filled.Warning,
         ) {
             Column {
-                WarningCard(
-                    title = stringResource(R.string.cooldown_heads_up_warning_title),
-                    description = stringResource(R.string.cooldown_heads_up_warning_message),
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    onClick = {}
-                )
-                Spacer(Modifier.height(8.dp))
+                if (!noteRead) {
+                    WarningCard(
+                        title = stringResource(R.string.cooldown_heads_up_cost_title),
+                        description = stringResource(R.string.cooldown_heads_up_cost_message),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        onClick = {},
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
                 SettingsToggleCard(
-                    title = stringResource(R.string.cooldown_heads_up_ack_title),
-                    subtitle = stringResource(R.string.cooldown_heads_up_ack_subtitle),
-                    icon = Icons.Filled.Warning,
-                    checked = acknowledged,
-                    shape = getExpressiveShape(3, 0, ShapeStyle.Large),
-                    onCheckedChange = {
-                        onUpdate(options.copy(headsUpSuppressionAcknowledged = it))
-                    }
-                )
-                Spacer(Modifier.height(2.dp))
-                SettingsToggleCard(
-                    title = stringResource(R.string.cooldown_heads_up_polite_title),
-                    subtitle = stringResource(R.string.cooldown_heads_up_polite_subtitle),
+                    title = stringResource(R.string.cooldown_heads_up_quieter_title),
+                    subtitle = stringResource(R.string.cooldown_heads_up_quieter_subtitle),
                     icon = Icons.Filled.Warning,
                     checked = options.headsUpPolite == HeadsUpOption.SUPPRESS,
-                    // Disabled until acknowledged, which is the same gate the policy enforces -- shown
-                    // here rather than only enforced there, so the user is told why.
-                    enabled = acknowledged,
-                    shape = getExpressiveShape(3, 1, ShapeStyle.Large),
+                    shape = getExpressiveShape(3, 0, ShapeStyle.Large),
                     onCheckedChange = {
                         onUpdate(
                             options.copy(
@@ -373,12 +507,11 @@ fun CooldownOptionsEditor(
                 )
                 Spacer(Modifier.height(2.dp))
                 SettingsToggleCard(
-                    title = stringResource(R.string.cooldown_heads_up_muted_title),
-                    subtitle = stringResource(R.string.cooldown_heads_up_muted_subtitle),
+                    title = stringResource(R.string.cooldown_heads_up_silent_title),
+                    subtitle = stringResource(R.string.cooldown_heads_up_silent_subtitle),
                     icon = Icons.Filled.Warning,
                     checked = options.headsUpMuted == HeadsUpOption.SUPPRESS,
-                    enabled = acknowledged,
-                    shape = getExpressiveShape(3, 2, ShapeStyle.Large),
+                    shape = getExpressiveShape(3, 1, ShapeStyle.Large),
                     onCheckedChange = {
                         onUpdate(
                             options.copy(
@@ -386,6 +519,17 @@ fun CooldownOptionsEditor(
                                     if (it) HeadsUpOption.SUPPRESS else HeadsUpOption.INHERIT
                             )
                         )
+                    }
+                )
+                Spacer(Modifier.height(2.dp))
+                SettingsToggleCard(
+                    title = stringResource(R.string.cooldown_heads_up_note_read_title),
+                    subtitle = stringResource(R.string.cooldown_heads_up_note_read_subtitle),
+                    icon = Icons.Filled.Warning,
+                    checked = noteRead,
+                    shape = getExpressiveShape(3, 2, ShapeStyle.Large),
+                    onCheckedChange = {
+                        onUpdate(options.copy(headsUpSuppressionAcknowledged = it))
                     }
                 )
             }
@@ -396,7 +540,7 @@ fun CooldownOptionsEditor(
         // ---- Visibility: stated, not offered. See the sentence. ----
         ExpandableSettingCard(
             title = stringResource(R.string.cooldown_section_visibility),
-            icon = Icons.Outlined.Visibility
+            icon = Icons.Outlined.Visibility,
         ) {
             Column {
                 SettingsToggleCard(
@@ -422,7 +566,7 @@ fun CooldownOptionsEditor(
                 Text(
                     text = stringResource(R.string.cooldown_visibility_deferred_message),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -431,13 +575,13 @@ fun CooldownOptionsEditor(
 
         // ---- Exemptions: four categories, always on, and the per-app switch that is the fifth ----
         ExpandableSettingCard(
-            title = stringResource(R.string.cooldown_section_exemptions),
-            icon = Icons.Outlined.DoNotDisturbOn
+            title = stringResource(R.string.cooldown_section_exempt),
+            icon = Icons.Outlined.DoNotDisturbOn,
         ) {
             Text(
-                text = stringResource(R.string.cooldown_exemptions_message),
+                text = stringResource(R.string.cooldown_exempt_message),
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
@@ -446,66 +590,128 @@ fun CooldownOptionsEditor(
         // ---- The two-writer choice, which is a promise rather than a switch (spec 1.1) ----
         ExpandableSettingCard(
             title = stringResource(R.string.cooldown_second_writer_title),
-            icon = Icons.Filled.Notifications
+            icon = Icons.Filled.Notifications,
         ) {
             Column {
                 Text(
                     text = stringResource(R.string.cooldown_second_writer_message),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
                     text = stringResource(R.string.cooldown_second_writer_option_a),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
                     text = stringResource(R.string.cooldown_second_writer_option_b),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
     }
 }
 
-private data class Choice<T>(val value: T, val title: String, val description: String)
-
-/**
- * A radio group out of the host's own `EngineOptionCard`, which is what it already uses for
- * "exactly one of these" (`EngineSettingsScreen`). `null` is always an option where the option set
- * is nullable, and it always means the same thing: use the AOSP value.
- */
+/** A row of the stated sequence: what happens, in one line, with nothing to configure. */
 @Composable
-private fun <T> ChoiceGroup(
-    title: String,
-    subtitle: String,
-    current: T,
-    choices: List<Choice<T>>,
-    onSelect: (T) -> Unit,
-) {
+private fun SequenceRow(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+    )
+}
+
+/** A label above a field, for the sub-options that are not cards of their own. */
+@Composable
+private fun SettingsLabel(title: String, subtitle: String) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
             text = title,
             style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold
+            fontWeight = FontWeight.SemiBold,
         )
         Text(
             text = subtitle,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(8.dp))
-        choices.forEachIndexed { index, choice ->
-            EngineOptionCard(
-                title = choice.title,
-                description = choice.description,
-                isSelected = choice.value == current,
-                onClick = { onSelect(choice.value) }
+    }
+}
+
+/** A shortcut for a described value, in the host's own "one of these" card. */
+@Composable
+private fun PresetCard(
+    title: String,
+    description: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    EngineOptionCard(
+        title = title,
+        description = description,
+        isSelected = selected,
+        onClick = onClick,
+    )
+}
+
+/**
+ * A number the user can actually change.
+ *
+ * The text is held locally so that a half-typed entry is not thrown away, and the option is written
+ * only when the entry parses **and** is in range: [parse] answers null otherwise, the screen shows
+ * [problemText] and stores nothing rather than storing a clamped value the user did not choose.
+ * [fallback] is what an unset option means, so a field never hides a value that is in force.
+ */
+@Composable
+private fun <T> NumberField(
+    label: String,
+    option: String?,
+    fallback: String,
+    parse: (String) -> T?,
+    describe: (T) -> String,
+    problemText: String,
+    onValue: (T) -> Unit,
+) {
+    val shown = option ?: fallback
+    var text by remember(shown) { mutableStateOf(shown) }
+    val parsed = remember(text) { parse(text) }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        shape = getExpressiveShape(1, 0, ShapeStyle.Large),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { entered ->
+                    text = entered
+                    // Only a value that parses and is in range is stored. The bounds live in
+                    // `CooldownOptionBounds`, shared with the engine's own sanitiser, so the screen
+                    // cannot accept something the write path would refuse.
+                    parse(entered)?.let(onValue)
+                },
+                label = { Text(label) },
+                singleLine = true,
+                isError = parsed == null,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                supportingText = {
+                    Text(
+                        text = parsed?.let { stringResource(R.string.cooldown_value_is, describe(it)) }
+                            ?: problemText,
+                        color = if (parsed == null) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
             )
-            if (index != choices.lastIndex) Spacer(Modifier.height(8.dp))
         }
     }
 }
