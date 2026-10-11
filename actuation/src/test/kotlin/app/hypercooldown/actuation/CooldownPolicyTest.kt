@@ -24,42 +24,59 @@ class CooldownPolicyTest {
         assertEquals(HeadsUpOption.INHERIT, p.headsUp)
         assertEquals(IslandOption.INHERIT, p.island)
         assertEquals(VisibilityOption.INHERIT, p.visibility)
-        assertTrue(p.notes.isEmpty())
     }
 
     @Test
     fun `inherit resolves to AOSP's values in MUTED`() {
         val p = presentation(CooldownState.MUTED)!!
         assertEquals(SoundOption.INHERIT, p.sound)
-        assertEquals(HeadsUpOption.INHERIT, p.headsUp)
+        assertEquals(HeadsUpOption.SUPPRESS, p.headsUp)
         assertEquals(IslandOption.INHERIT, p.island)
     }
 
     @Test
-    fun `heads-up suppression is unreachable without its acknowledgement`() {
+    fun `heads-up suppression is honoured without a separate acknowledgement`() {
+        // Re-derived rather than weakened. The acknowledgement used to gate this row because the write
+        // was a *permanent, user-locked* side effect. It is not permanent any more: importance is the
+        // one lock bit transaction 43 clears, it is shell-reachable, and `ChannelActuator.restore`
+        // sends it after every restore. So a second switch that blocks the row is a trap rather than a
+        // safeguard, and the honest cost is stated inline by the screen instead.
         val unacknowledged = presentation(
             CooldownState.MUTED,
             CooldownOptions(headsUpMuted = HeadsUpOption.SUPPRESS),
         )!!
-        assertEquals(HeadsUpOption.INHERIT, unacknowledged.headsUp)
-        assertTrue(unacknowledged.notes.contains(PolicyNote.HEADS_UP_SUPPRESS_UNACKNOWLEDGED))
-    }
+        assertEquals(HeadsUpOption.SUPPRESS, unacknowledged.headsUp)
 
-    @Test
-    fun `heads-up suppression is reachable once acknowledged`() {
         val acknowledged = presentation(
             CooldownState.MUTED,
             CooldownOptions(headsUpMuted = HeadsUpOption.SUPPRESS, headsUpSuppressionAcknowledged = true),
         )!!
         assertEquals(HeadsUpOption.SUPPRESS, acknowledged.headsUp)
-        assertTrue(acknowledged.notes.isEmpty())
     }
 
     @Test
-    fun `island suppression needs no acknowledgement, because the island is the host's own notification`() {
+    fun `POLITE keeps AOSP's heads-up and MUTED drops it, which is what an unset option means`() {
+        // The default is per state, and it is the same asymmetry the option set already has: MUTED has
+        // cleared the sound and the vibration by its own realisation, so the banner is the last
+        // attention effect left and leaving it up is what the state's name promises not to do. POLITE
+        // is a real 30 % alert and keeps AOSP's banner.
+        assertEquals(HeadsUpOption.INHERIT, presentation(CooldownState.POLITE)!!.headsUp)
+        assertEquals(HeadsUpOption.SUPPRESS, presentation(CooldownState.MUTED)!!.headsUp)
+        // An explicit choice still wins in either direction — the default is a default, not a rule.
+        assertEquals(
+            HeadsUpOption.INHERIT,
+            presentation(CooldownState.MUTED, CooldownOptions(headsUpMuted = HeadsUpOption.INHERIT))!!.headsUp,
+        )
+        assertEquals(
+            HeadsUpOption.SUPPRESS,
+            presentation(CooldownState.POLITE, CooldownOptions(headsUpPolite = HeadsUpOption.SUPPRESS))!!.headsUp,
+        )
+    }
+
+    @Test
+    fun `island suppression writes no channel, so nothing gates it and nothing else moves with it`() {
         val p = presentation(CooldownState.MUTED, CooldownOptions(islandMuted = IslandOption.SUPPRESS))!!
         assertEquals(IslandOption.SUPPRESS, p.island)
-        assertTrue(p.notes.isEmpty())
     }
 
     @Test
@@ -68,9 +85,10 @@ class CooldownPolicyTest {
             CooldownState.POLITE,
             CooldownOptions(islandPolite = IslandOption.SUPPRESS, headsUpPolite = HeadsUpOption.SUPPRESS),
         )!!
-        // The heads-up half is still refused for want of an acknowledgement, while the island half is
-        // honoured. This is the pin that keeps the two from collapsing into one switch with two names.
-        assertEquals(HeadsUpOption.INHERIT, p.headsUp)
+        // Both halves are honoured, and each is read from its own field: the island writes nothing to
+        // any channel, the heads-up writes importance, and neither decides the other. This is the pin
+        // that keeps the two from collapsing into one switch with two names.
+        assertEquals(HeadsUpOption.SUPPRESS, p.headsUp)
         assertEquals(IslandOption.SUPPRESS, p.island)
     }
 

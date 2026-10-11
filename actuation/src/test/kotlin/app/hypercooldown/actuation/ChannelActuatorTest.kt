@@ -209,4 +209,151 @@ class ChannelActuatorTest {
         assertTrue(FidelityGap.POLITE_SOUND_UNAVAILABLE in transport.lastEdit()!!.gaps)
         assertFalse(operations.isEmpty())
     }
+
+    // ---------------------------------------------------------------- the importance lock, part A
+
+    /** An actuator whose heads-up option lowers importance in both damped states. */
+    private fun suppressingActuator(): ChannelActuator = ChannelActuator(
+        transport,
+        store,
+        NoPoliteSound,
+        config,
+        headsUpFor = { HeadsUpRealisation(HeadsUpOption.SUPPRESS, HeadsUpOption.SUPPRESS) },
+    )
+
+    @Test
+    fun `a suppressed heads-up lowers the importance the channel ends up carrying`() {
+        suppressingActuator().apply(target, snapshot(), CooldownState.MUTED)
+
+        assertEquals(3, transport.lastEdit()!!.fields.importance)
+        assertEquals(3, transport.observed().fields.importance)
+        // The write is what locks the field: `lockFieldsForUpdateLocked` locks only fields whose value
+        // changed, so the bit appears here and nowhere else.
+        assertTrue(transport.userLockedFields and RecordingTransport.IMPORTANCE_LOCK != 0)
+    }
+
+    @Test
+    fun `a restore releases the importance lock`() {
+        // The pin for Part A's second half, and the one the mutation removes: comment out the
+        // `unlockImportance` call in `ChannelActuator.restore` and this fails with
+        // `userLockedFields` still carrying 0x04 (and every other assertion below unchanged).
+        val suppressing = suppressingActuator()
+        suppressing.apply(target, snapshot(), CooldownState.MUTED)
+        assertTrue(transport.userLockedFields and RecordingTransport.IMPORTANCE_LOCK != 0)
+
+        assertEquals(WriteResult.Ok, suppressing.restore(target.key))
+
+        assertEquals(
+            0,
+            transport.userLockedFields and RecordingTransport.IMPORTANCE_LOCK,
+            "the restored channel still carries USER_LOCKED_IMPORTANCE",
+        )
+        // The value went back as well: releasing the bit is the *second* half, not a substitute.
+        assertEquals(4, transport.lastEdit()!!.fields.importance)
+        assertEquals(listOf(target), transport.unlocks)
+        // The transaction addresses one channel of one app, so the id has to be the one the write
+        // touched rather than a name reconstructed from the key.
+        assertEquals(listOf("messages"), transport.unlockedChannels)
+    }
+
+    @Test
+    fun `the unlock is sent after the restore write, never before it`() {
+        val suppressing = suppressingActuator()
+        suppressing.apply(target, snapshot(), CooldownState.MUTED)
+        operations.clear()
+
+        suppressing.restore(target.key)
+
+        // `lockFieldsForUpdateLocked` locks a field whose value the write changed, so the restore write
+        // is what sets the bit and the unlock has to come after it. Unlocking first would be undone by
+        // the write that follows; unlocking after a *failed* write would release a lock never taken.
+        assertEquals(listOf("write:${target.key}", "unlock:${target.key}", "clear:${target.key}"), operations)
+    }
+
+    @Test
+    fun `a restore that never lowered importance sends no unlock`() {
+        actuator.apply(target, snapshot(), CooldownState.MUTED)
+        operations.clear()
+
+        assertEquals(WriteResult.Ok, actuator.restore(target.key))
+
+        assertTrue(transport.unlocks.isEmpty())
+        assertFalse(operations.any { it.startsWith("unlock:") })
+    }
+
+    @Test
+    fun `a restore whose unlock fails keeps the record and reports it`() {
+        val suppressing = suppressingActuator()
+        suppressing.apply(target, snapshot(), CooldownState.MUTED)
+        transport.nextUnlockResult = WriteResult.Failed("binder died")
+
+        val result = suppressing.restore(target.key)
+
+        // Invariant 2 in the other direction: the record is only dropped once the channel is fully back,
+        // and "fully back" includes the lock bit this app set. Keeping it is what makes the retry
+        // possible; the content is already restored, so the retry rewrites nothing that changed.
+        assertTrue(result is WriteResult.Failed)
+        assertNotNull(store.snapshotFor(target.key))
+        // The retry is idempotent: the content is already back, so only the unlock is actually awaited.
+        transport.nextUnlockResult = WriteResult.Ok
+        suppressing.restore(target.key)
+        assertEquals(0, transport.userLockedFields and RecordingTransport.IMPORTANCE_LOCK)
+        assertNull(store.snapshotFor(target.key))
+    }
+
+    @Test
+    fun `the panic path and reconciliation release the lock too, because they are the same restore`() {
+        val suppressing = suppressingActuator()
+        suppressing.apply(target, snapshot(), CooldownState.MUTED)
+
+        val results = suppressing.restoreAll()
+
+        assertEquals(listOf(target.key to WriteResult.Ok), results)
+        assertEquals(0, transport.userLockedFields and RecordingTransport.IMPORTANCE_LOCK)
+        assertEquals(listOf(target), transport.unlocks)
+    }
+
+    @Test
+    fun `a stand-down releases the lock as well, since it restores rather than drops the record`() {
+        val suppressing = suppressingActuator()
+        suppressing.apply(target, snapshot(), CooldownState.MUTED)
+
+        // A channel that plays nothing is the state a cooldown leaves behind, so the stand-down is a
+        // restore — and a restore that skipped the unlock would leave the bit with no owner.
+        assertEquals(WriteResult.Ok, suppressing.standDown(target.key, transport.observed()))
+
+        assertEquals(0, transport.userLockedFields and RecordingTransport.IMPORTANCE_LOCK)
+        assertNull(store.snapshotFor(target.key))
+    }
+
+    @Test
+    fun `a transport that cannot release the lock is never allowed to set it`() {
+        transport.canUnlockImportance = false
+        val suppressing = suppressingActuator()
+
+        suppressing.apply(target, snapshot(), CooldownState.MUTED)
+
+        // Fail closed, and said out loud rather than silently skipped: `USER_LOCKED_IMPORTANCE` is
+        // clearable only by transaction 43, so a transport that cannot send it must not be the one to
+        // set the bit. The demotion is refused, not attempted.
+        assertEquals(4, transport.lastEdit()!!.fields.importance)
+        assertEquals(0, transport.userLockedFields and RecordingTransport.IMPORTANCE_LOCK)
+        assertTrue(FidelityGap.HEADS_UP_SUPPRESS_UNRELEASABLE in transport.lastEdit()!!.gaps)
+    }
+
+    @Test
+    fun `the refusal is per state, so a transport without transaction 43 still mutes`() {
+        transport.canUnlockImportance = false
+        val suppressing = suppressingActuator()
+
+        suppressing.apply(target, snapshot(), CooldownState.POLITE)
+
+        // POLITE's demotion is refused but nothing else about the state moves: the head-up option is
+        // not allowed to take the sound, the vibration or the island with it.
+        val fields = transport.lastEdit()!!.fields
+        assertEquals(4, fields.importance)
+        assertNull(fields.soundUri)
+        assertEquals(listOf(0L, 77L, 200L, 77L), fields.vibrationPattern)
+        assertTrue(FidelityGap.HEADS_UP_SUPPRESS_UNRELEASABLE in transport.lastEdit()!!.gaps)
+    }
 }

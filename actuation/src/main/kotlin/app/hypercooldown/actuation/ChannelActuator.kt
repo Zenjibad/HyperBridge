@@ -29,6 +29,15 @@ class ChannelActuator(
     private val store: SnapshotStore,
     private val politeSound: PoliteSoundSource,
     private val config: EngineConfig,
+    /**
+     * The heads-up realisation for one **package**, resolved from its options by the wiring.
+     *
+     * A function and not a value, because one actuator serves every app that shares an
+     * [EngineConfig] — `CooldownRuntime` builds one coordinator per config — while the heads-up option
+     * is per app. It is read at write time, so a change in the options takes effect on the next post
+     * without rebuilding anything. The default is AOSP's own treatment.
+     */
+    private val headsUpFor: (String) -> HeadsUpRealisation = { HeadsUpRealisation.NONE },
 ) {
 
     /**
@@ -98,7 +107,7 @@ class ChannelActuator(
         if (record == null && state == CooldownState.DEFAULT) return WriteResult.Ok
 
         val original = record?.snapshot ?: observed
-        val desired = EditFactory.editFor(original, state, config, politeSound)
+        val desired = desiredEdit(original, state, target.packageName)
 
         // `observed` is what the channel carried when the alert *arrived*, and it stops being the
         // truth the moment anything writes. `onPost` settles due relaxations between observing and
@@ -152,7 +161,7 @@ class ChannelActuator(
     fun applyRecorded(key: String, state: CooldownState): WriteResult {
         quarantineOf(key)?.let { return refusal(it.key, it.reason) }
         val record = store.snapshotFor(key) ?: return WriteResult.Ok
-        val desired = EditFactory.editFor(record.snapshot, state, config, politeSound)
+        val desired = desiredEdit(record.snapshot, state, record.target.packageName)
         return write(record.target, record.snapshot, desired, damping = state != CooldownState.DEFAULT)
     }
 
@@ -173,14 +182,67 @@ class ChannelActuator(
         quarantineOf(key)?.let { return refusal(it.key, it.reason) }
         val record = store.snapshotFor(key) ?: return WriteResult.Ok
         val desired = EditFactory.editFor(record.snapshot, CooldownState.DEFAULT, config, politeSound)
+
+        // Was the importance actually moved by our last write? Read off the record, before the write
+        // below drops it: `record.written` is the persisted copy of what this app last put on the
+        // channel, and it is the only side of the comparison that survives a process restart.
+        val importanceWritten =
+            lastWrittenFor(key, record)?.importance != record.snapshot.fields.importance
+
         // The transport is called directly rather than through `write`: a restore does not need a
         // "last write" marker, because a successful one drops the record the marker belongs to.
         val result = transport.write(record.target, record.snapshot, desired)
-        if (result == WriteResult.Ok) {
-            written.remove(key)
-            store.clear(key)
+        if (result != WriteResult.Ok) return result
+
+        // The value is back; the *lock bit* this app's own write set is not, and transaction 43 is the
+        // only call that clears it. The order is forced and it is write-then-unlock: the write is what
+        // locks the field (`lockFieldsForUpdateLocked` locks only fields whose value changed), so
+        // unlocking first would be undone by the write that follows, and a write that failed has
+        // nothing locked to release. This is the second half of "a lowered importance is recoverable",
+        // and it is a no-op for a record whose write never touched importance.
+        val released =
+            if (importanceWritten) transport.unlockImportance(record.target, desired.fields.channelId)
+            else WriteResult.Ok
+        if (released != WriteResult.Ok) {
+            // Spec §6, "fail loud, not silent", and invariant 2 with it: the record is *kept*, so the
+            // next reconcile (or panic restore) retries both halves. The content is already back, so
+            // the retry rewrites nothing that changed — but the lock bit is the residue this app
+            // promised to clear, so a restore that leaves it is not a successful restore.
+            return WriteResult.Failed(
+                "restored ${record.target.key} but could not release its importance lock: " +
+                    (released as WriteResult.Failed).reason,
+            )
         }
+
+        written.remove(key)
+        store.clear(key)
         return result
+    }
+
+    /**
+     * The content to write for [state], with the heads-up demotion applied only when this transport
+     * can take the demotion back.
+     *
+     * Fail closed, and say so: `USER_LOCKED_IMPORTANCE` is clearable only by transaction 43, so a
+     * transport that cannot send it must not be the one to set the bit. The refusal is recorded as a
+     * [FidelityGap] rather than silently skipped — spec §5.6's rule that a cooldown doing less than it
+     * claims must be visible.
+     */
+    private fun desiredEdit(
+        original: ChannelSnapshot,
+        state: CooldownState,
+        packageName: String,
+    ): ChannelEdit {
+        val headsUp = headsUpFor(packageName)
+        val releasable = transport.canUnlockImportance || !headsUp.lowers(state)
+        val edit = EditFactory.editFor(
+            original,
+            state,
+            config,
+            politeSound,
+            if (releasable) headsUp else HeadsUpRealisation.NONE,
+        )
+        return if (releasable) edit else edit.copy(gaps = edit.gaps + FidelityGap.HEADS_UP_SUPPRESS_UNRELEASABLE)
     }
 
     /**
@@ -348,5 +410,6 @@ class ChannelActuator(
     private companion object {
         /** How many of a key's own damping payloads are remembered; one is what the channel carries. */
         const val REMEMBERED_DAMPING = 8
+
     }
 }

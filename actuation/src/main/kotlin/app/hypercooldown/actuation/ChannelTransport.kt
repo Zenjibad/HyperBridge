@@ -22,6 +22,37 @@ interface ChannelTransport {
     /** Short name for logs and for Q3's decision record. */
     val name: String
 
+    /**
+     * Whether this transport can also send `unlockNotificationChannel` — transaction 43, the only
+     * call on this ROM that clears `USER_LOCKED_IMPORTANCE` (Q2).
+     *
+     * It gates the heads-up option rather than merely reporting a capability. A transport that cannot
+     * release the bit must never be the one that sets it: `ChannelFields.importance` is written by
+     * transaction 42 like every other field, and its lock bit would then have no owner and no way
+     * back. Default `false`, so a new transport is fail-closed by omission.
+     */
+    val canUnlockImportance: Boolean get() = false
+
+    /**
+     * `unlockNotificationChannel(String pkg, int uid, String channelId)` — transaction 43.
+     *
+     * The ordering against [write] is forced, and it is the whole reason this is a second call rather
+     * than a field in the edit: `lockFieldsForUpdateLocked` locks a field whose **value changed**, so
+     * the restore write is what *sets* `USER_LOCKED_IMPORTANCE`. Unlocking before that write would be
+     * undone by it, and unlocking after a write that **failed** would release a lock that was never
+     * taken — which is why `ChannelActuator.restore` calls this only after a write that came back
+     * `Ok`, and only for a record whose last write actually moved the importance.
+     *
+     * The default refuses, so a transport with no such transaction says so instead of pretending.
+     *
+     * [channelId] is a parameter rather than a field of [ChannelTarget] because a target is one *app*
+     * (`CooldownKeys.perApp`), while the transaction addresses one channel of it. The caller has it
+     * on the record's snapshot, which is also what makes the unlock address the channel the write
+     * actually touched.
+     */
+    fun unlockImportance(target: ChannelTarget, channelId: String): WriteResult =
+        WriteResult.Failed("transport '$name' cannot send unlockNotificationChannel (43)")
+
     /** Replaces the whole channel for [target] with the content of [edit]. */
     fun write(target: ChannelTarget, snapshot: ChannelSnapshot, edit: ChannelEdit): WriteResult
 

@@ -24,6 +24,15 @@ enum class FidelityGap {
      * opaque.
      */
     POLITE_VIBRATION_UNSCALABLE,
+
+    /**
+     * The heads-up option asked for a demotion and the transport cannot release the lock that
+     * demotion sets, so the importance was left alone. `unlockNotificationChannel` — transaction 43 —
+     * is the only call on this ROM that clears `USER_LOCKED_IMPORTANCE`, and a transport that cannot
+     * send it must not be the one to set the bit: the residue would be permanent, with no owner.
+     * The demotion is refused rather than attempted, and said out loud rather than silently skipped.
+     */
+    HEADS_UP_SUPPRESS_UNRELEASABLE,
 }
 
 /**

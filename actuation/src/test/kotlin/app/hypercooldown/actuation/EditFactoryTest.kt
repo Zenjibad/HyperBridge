@@ -13,8 +13,12 @@ class EditFactoryTest {
     private val config = EngineConfig()
     private val original = snapshot()
 
-    private fun edit(state: CooldownState, source: PoliteSoundSource = NoPoliteSound) =
-        EditFactory.editFor(original, state, config, source)
+    private fun edit(
+        state: CooldownState,
+        source: PoliteSoundSource = NoPoliteSound,
+        headsUp: HeadsUpRealisation = HeadsUpRealisation.NONE,
+    ) =
+        EditFactory.editFor(original, state, config, source, headsUp)
 
     @Test
     fun `DEFAULT replays the snapshot field for field`() {
@@ -50,12 +54,75 @@ class EditFactoryTest {
     }
 
     @Test
-    fun `no state ever changes importance`() {
-        // Spec §5.4 and the Q4 decision: AOSP's MUTED is not an importance change, and the heads-up
-        // must stay as interruptive as AOSP leaves it.
+    fun `a suppressed heads-up is a demotion and nothing else`() {
+        val source = PoliteSoundSource { "content://copy/of/the/sound" }
+        val plain = EditFactory.editFor(original, CooldownState.POLITE, config, source)
+        val quiet = EditFactory.editFor(
+            original,
+            CooldownState.POLITE,
+            config,
+            source,
+            HeadsUpRealisation(polite = HeadsUpOption.SUPPRESS),
+        )
+        // DEFAULT (3) is the highest importance below the platform's heads-up gate (`>= HIGH`, 4), so
+        // it is the smallest demotion that removes the banner — and the sound is untouched, which is
+        // what keeps POLITE a real but quieter alert rather than a silent one.
+        assertEquals(3, quiet.fields.importance)
+        assertEquals(plain.fields.copy(importance = 3), quiet.fields)
+        assertEquals(plain.gaps, quiet.gaps)
+    }
+
+    @Test
+    fun `no state changes importance unless the heads-up option asks it to`() {
+        // Re-derived, not weakened. Spec §5.4's old contract was "never write importance", and the Q4
+        // decision is still why that is the *default*: AOSP's MUTED is not an importance change and
+        // the heads-up stays as interruptive as AOSP leaves it. What changed is that the heads-up
+        // option exists and is now realisable, so the pin is the two halves: untouched when nobody
+        // asked, demoted when somebody did.
         for (state in CooldownState.entries) {
             assertEquals(original.fields.importance, edit(state).fields.importance, "state $state")
         }
+        val suppressed = HeadsUpRealisation(polite = HeadsUpOption.SUPPRESS, muted = HeadsUpOption.SUPPRESS)
+        for (state in CooldownState.entries) {
+            val expected = if (state == CooldownState.DEFAULT) original.fields.importance else 3
+            assertEquals(expected, edit(state, headsUp = suppressed).fields.importance, "state $state")
+        }
+    }
+
+    @Test
+    fun `a heads-up demotion applies to its own state only, and never takes the sound away`() {
+        // The island row and the heads-up row are separate on purpose, and so are POLITE and MUTED:
+        // a demotion of one state must not leak into the other. This is the pin for POLITE's half of
+        // that, and the sound is asserted beside it because POLITE with no sound would be MUTED.
+        val source = PoliteSoundSource { "content://copy" }
+        val politeSuppressed = HeadsUpRealisation(polite = HeadsUpOption.SUPPRESS)
+
+        assertEquals(3, edit(CooldownState.POLITE, source, politeSuppressed).fields.importance)
+        assertEquals(
+            original.fields.importance,
+            edit(CooldownState.MUTED, source, politeSuppressed).fields.importance,
+        )
+        assertEquals(
+            "content://copy",
+            edit(CooldownState.POLITE, source, politeSuppressed).fields.soundUri,
+        )
+    }
+
+    @Test
+    fun `a channel already below the gate is left alone, and one above it is only brought to DEFAULT`() {
+        // `minOf`, not an assignment: `LOW` is already below the heads-up gate, so "demoting" it would
+        // be a promotion, and `MAX` only has to lose the banner, not the rest of its ranking.
+        val suppressed = HeadsUpRealisation(muted = HeadsUpOption.SUPPRESS)
+        val low = snapshot(fields = channelFields(importance = 2))
+        val max = snapshot(fields = channelFields(importance = 5))
+        assertEquals(
+            2,
+            EditFactory.editFor(low, CooldownState.MUTED, config, NoPoliteSound, suppressed).fields.importance,
+        )
+        assertEquals(
+            3,
+            EditFactory.editFor(max, CooldownState.MUTED, config, NoPoliteSound, suppressed).fields.importance,
+        )
     }
 
     @Test

@@ -17,6 +17,7 @@ object EditFactory {
         state: CooldownState,
         config: EngineConfig,
         politeSound: PoliteSoundSource,
+        headsUp: HeadsUpRealisation = HeadsUpRealisation.NONE,
     ): ChannelEdit {
         val gaps = mutableSetOf<FidelityGap>()
         val source = snapshot.fields
@@ -62,8 +63,10 @@ object EditFactory {
         return ChannelEdit(
             fields = ChannelFields(
                 channelId = source.channelId,
-                // Copied, never written back differently: see ChannelFields' note on AOSP parity.
-                importance = source.importance,
+                // Copied through unless the heads-up option for this state demotes it — the one case
+                // in which this app writes importance at all, and the reason `ChannelFields` carries
+                // the field (see [demotedImportance]).
+                importance = demotedImportance(source.importance, headsUp.forState(state)),
                 soundUri = soundUri,
                 // The attributes describe the sound, so a state that ends up with no sound carries
                 // none of them. `setSound(null, null)` drops them on the platform side, so keeping
@@ -80,6 +83,23 @@ object EditFactory {
             gaps = gaps,
         )
     }
+
+    /**
+     * The channel's importance, with the heads-up demotion applied when [option] asks for it.
+     *
+     * The values are the platform's own (`NotificationManager.IMPORTANCE_HIGH` and
+     * `IMPORTANCE_DEFAULT`), spelled as the literals `:actuation` is allowed to hold: this module has
+     * no Android dependency and must not acquire one for two integers.
+     *
+     * The demotion is the *smallest* one that removes the banner, and it is deliberately a demotion
+     * and not a silence: `IMPORTANCE_DEFAULT` still plays the channel's sound, so POLITE stays a 30 %
+     * audible alert with no heads-up rather than becoming a second silent state. `minOf` and not a
+     * plain assignment, because a channel already below the gate has no banner to remove — demoting
+     * `LOW` to `DEFAULT` would be a *promotion*, and demoting `MIN` to `DEFAULT` would take something
+     * from the user for nothing.
+     */
+    private fun demotedImportance(importance: Int, option: HeadsUpOption): Int =
+        if (option == HeadsUpOption.SUPPRESS) minOf(importance, IMPORTANCE_DEFAULT) else importance
 
     /**
      * POLITE's vibration, decided once: the pattern to carry and the effect to carry.
@@ -127,4 +147,7 @@ object EditFactory {
 
     /** POLITE's single vibration representation: the scaled pattern, or the opaque effect. */
     private class PoliteVibration(val pattern: List<Long>?, val effect: String?)
+
+    /** `NotificationManager.IMPORTANCE_DEFAULT`: audible, below the heads-up gate. */
+    private const val IMPORTANCE_DEFAULT = 3
 }
