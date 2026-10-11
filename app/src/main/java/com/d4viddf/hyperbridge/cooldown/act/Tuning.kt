@@ -1,5 +1,6 @@
 package com.d4viddf.hyperbridge.cooldown.act
 
+import app.hypercooldown.actuation.CooldownOptionBounds
 import app.hypercooldown.engine.EngineConfig
 
 /**
@@ -70,13 +71,13 @@ data class TuningValues(
         const val COUNTER_RESET_DEFAULT = 10
 
         /** One second to one hour, per timeout. */
-        val TIMEOUT_POLITE_MS_RANGE = 1_000L..3_600_000L
-        val TIMEOUT_MUTED_MS_RANGE = 1_000L..3_600_000L
+        val TIMEOUT_POLITE_MS_RANGE = CooldownOptionBounds.TIMEOUT_MS_RANGE
+        val TIMEOUT_MUTED_MS_RANGE = CooldownOptionBounds.TIMEOUT_MS_RANGE
 
         /** The volumes are factors, not percentages: AOSP's 30 and 0 are 0.30 and 0.0 here. */
-        val VOLUME_RANGE = 0.0f..1.0f
+        val VOLUME_RANGE = CooldownOptionBounds.ATTENUATION_RANGE
 
-        val COUNTER_RESET_RANGE = 1..100
+        val COUNTER_RESET_RANGE = CooldownOptionBounds.COUNTER_RESET_RANGE
 
         /**
          * [values] with every out-of-range field replaced by AOSP's value for that field, one field

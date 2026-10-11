@@ -11,11 +11,17 @@ enum class VibrationOption { INHERIT, OFF }
 /**
  * What POLITE/MUTED do to the heads-up.
  *
- * `SUPPRESS` is **not free**: there is no "show heads-up" channel attribute, so the only lever is
- * `setImportance(...)`, which reaches `PreferencesHelper.updateNotificationChannel(..., fromUser = true)`
- * and therefore *user-locks* the importance bit permanently (transaction 43 clears only that bit, and
- * `unlockAllNotificationChannels` needs `checkCallerIsSystem`). It also demotes the notification
- * everywhere, not just during the window. AOSP deliberately does not touch importance (Q4).
+ * `SUPPRESS` is now **recoverable**, and that is the whole reason it is offered. There is no "show
+ * heads-up" channel attribute, so the only lever is `setImportance(...)`, which reaches
+ * `PreferencesHelper.updateNotificationChannel(..., fromUser = true)` and therefore *user-locks* the
+ * importance bit — but importance is the one lock bit `unlockNotificationChannel` (transaction 43)
+ * clears, and that transaction is shell-reachable. So a restore puts the original importance back and
+ * then releases the bit (`ChannelActuator.restore`), and the option is no longer a one-way door.
+ *
+ * What it still costs, and what the UI has to say: while it is lowered the notification is demoted in
+ * ranking and appearance everywhere, not only during the cooldown window, and an app that notices and
+ * re-creates or deletes its own channel ends the cooldown for itself. AOSP does not do this at all
+ * (Q4), which is why the default is AOSP's for POLITE.
  */
 enum class HeadsUpOption { INHERIT, SUPPRESS }
 
@@ -104,12 +110,26 @@ data class CooldownOptions(
      * Realises the options that are expressible as engine numbers. The engine is frozen and is not
      * given a new field for a UI concern; a "silent POLITE" is a zero POLITE volume, which is the
      * value AOSP's own MUTED uses.
+     *
+     * Every number goes through [CooldownOptionBounds] on the way in, because a stored value is not
+     * necessarily one the engine can use: a hand-edited `attenuation_factor=-1` used to reach
+     * `EngineConfig.politeVolume` unclamped and become a negative vibration amplitude. An
+     * out-of-range number is replaced by AOSP's value for that field — the same rule
+     * `TuningValues.sanitize` applies, and for the same reason: a bad factor must not throw away a
+     * good timeout.
      */
     fun effectiveConfig(base: EngineConfig): EngineConfig = EngineConfig(
-        timeoutPoliteMs = timeoutPoliteMs ?: base.timeoutPoliteMs,
-        timeoutMutedMs = timeoutMutedMs ?: base.timeoutMutedMs,
-        politeVolume = if (soundPolite == SoundOption.SILENT) 0.0f else attenuationFactor ?: base.politeVolume,
+        timeoutPoliteMs = timeoutPoliteMs?.takeIf { it in CooldownOptionBounds.TIMEOUT_MS_RANGE }
+            ?: base.timeoutPoliteMs,
+        timeoutMutedMs = timeoutMutedMs?.takeIf { it in CooldownOptionBounds.TIMEOUT_MS_RANGE }
+            ?: base.timeoutMutedMs,
+        politeVolume = when {
+            soundPolite == SoundOption.SILENT -> 0.0f
+            else -> attenuationFactor?.takeIf { it in CooldownOptionBounds.ATTENUATION_RANGE }
+                ?: base.politeVolume
+        },
         mutedVolume = base.mutedVolume,
-        counterReset = counterReset ?: base.counterReset,
+        counterReset = counterReset?.takeIf { it in CooldownOptionBounds.COUNTER_RESET_RANGE }
+            ?: base.counterReset,
     )
 }
