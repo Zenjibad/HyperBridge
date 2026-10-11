@@ -147,6 +147,23 @@ class ChannelActuator(
                         "and the record of its original is gone",
                 )
             }
+            // And the sound half of the same refusal, asked of the thing that publishes the copies
+            // rather than of this process's memory. `written` and `dampedVibration` above are both
+            // process-local, so neither can see a copy published by an earlier install, by another
+            // process, or by the standalone `app.hypercooldown` — and on this ROM every development
+            // iteration *is* a reinstall, so the process-local markers are exactly the ones that are
+            // gone when it matters. Measured: `com.android.shell/shell_cmd`'s archived record holds our
+            // own `hypercooldown-polite-4887c9f0-10 (5).wav` as its pristine `soundUri`, against a
+            // measured pristine of the settings default a day earlier (root-cause §3.3). Recording that
+            // would make our damping the baseline, scale it again to 9 %, and restore the copy for
+            // good. Refused rather than written: spec §6, "fail loud, not silent", and the channel is
+            // left exactly as it is, which is the only action that cannot make it worse.
+            if (politeSound.isOurPublishedCopy(observed.fields.soundUri)) {
+                return WriteResult.Failed(
+                    "refusing to damp ${target.key}: the channel's sound is a copy this app published " +
+                        "for POLITE, so it is not a pristine original",
+                )
+            }
             store.record(target, observed)
         }
         return write(

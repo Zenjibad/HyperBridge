@@ -73,6 +73,16 @@ class AttenuatedSoundFactory(
     private val worker: Executor,
     private val budget: SoundBudget = SoundBudget(),
     private val note: (String) -> Unit = {},
+    /**
+     * Where the *name* of a sound's `MediaStore` row comes from — the durable half of
+     * [isOurPublishedCopy], and the only provenance that survives the reinstall which destroys the
+     * write-ahead record (see [PublishedCopyName]).
+     *
+     * Defaults to a lookup that never finds a name, which degrades to the in-memory half alone: the
+     * behaviour before this parameter existed. The wiring in `CooldownRuntime` is the one place that
+     * supplies the real one, so the default matters only to tests and to a construction mistake.
+     */
+    private val names: SoundNameLookup = SoundNameLookup { null },
 ) : PoliteSoundSource {
 
     /**
@@ -147,23 +157,50 @@ class AttenuatedSoundFactory(
     /**
      * The URI whose bytes are the sound to attenuate, or null with a reason.
      *
-     * A copy this process published is refused here rather than attenuated: it is already 30 % of the
+     * A copy this app published is refused here rather than attenuated: it is already 30 % of the
      * user's sound, so scaling it again is 9 %, and the device measured exactly that (peak 6497 ->
      * 1949) once POLITE began carrying the copy. The refusal is the last line of defence — the caller
-     * is supposed to hand over the pristine snapshot — and it costs one lookup in a map of at most
-     * `SoundCopyCache`'s bound.
+     * is supposed to hand over the pristine snapshot — and it costs one cache lookup plus, on a miss, a
+     * name lookup for the row.
      */
     private fun sourceOf(snapshot: ChannelSnapshot): String? {
         val candidate = snapshot.fields.soundUri?.takeIf { it.isNotBlank() } ?: return null
-        val origin = cache.sourceOfCopy(candidate)
-        if (origin != null) {
-            note(
-                "refusing to attenuate $candidate: it is the copy this app published for $origin, " +
-                    "not a pristine sound",
-            )
-            return null
+        val reason = ourCopyReason(candidate) ?: return candidate
+        note("refusing to attenuate $candidate: $reason, not a pristine sound")
+        return null
+    }
+
+    /**
+     * Whether [soundUri] is one of this app's own published POLITE copies.
+     *
+     * Two halves, cheapest first, and the second one is the reason this is not a registry:
+     *
+     *  1. **This process's cache.** [SoundCopyCache.sourceOfCopy] is an exact reverse lookup —
+     *     `(source, factor) -> published` turned the other way — for every copy this process still
+     *     remembers, and its bound is the cache's own.
+     *  2. **The row's name.** [PublishedCopyName] matches the name this app gave the `MediaStore` row it
+     *     published. That survives the process, the install, and the data clear, which is exactly what
+     *     the cache does not: a reinstall is every development iteration on this ROM, and it is what
+     *     destroyed the record that held `ig_direct`'s original (root-cause §3.1, §4). It also covers
+     *     the standalone `app.hypercooldown`, which publishes under the same name — the cross-writer
+     *     case the process-local markers in `ChannelActuator` structurally cannot see.
+     *
+     * Both halves answer only "is this a copy of ours". Neither can say what the sound behind it was,
+     * and neither can prove a *negative*: a copy whose row was deleted or renamed is no longer
+     * recognisable, and a channel carrying it is treated as pristine again.
+     */
+    override fun isOurPublishedCopy(soundUri: String?): Boolean {
+        val uri = soundUri?.takeIf { it.isNotBlank() } ?: return false
+        return ourCopyReason(uri) != null
+    }
+
+    /** Why [uri] is a copy of ours, in the words of the refusal — or null when it is not one. */
+    private fun ourCopyReason(uri: String): String? {
+        cache.sourceOfCopy(uri)?.let { return "it is the copy this app published for $it" }
+        if (PublishedCopyName.isOurs(names.displayNameOf(uri))) {
+            return "it is named like a copy this app published, and no process remembers its source"
         }
-        return candidate
+        return null
     }
 
     private fun submit(source: String, factor: Float) {
@@ -262,10 +299,14 @@ class AttenuatedSoundFactory(
     }
 
     /**
-     * The name of the MediaStore row. The source is identified by a hash so a row can be traced back to
-     * the sound it attenuates, and the factor is in the name so two attenuation settings never look
-     * alike in `/sdcard/Notifications`.
+     * The name of the MediaStore row.
+     *
+     * Delegated to [PublishedCopyName] rather than spelled here, because the same name is what the
+     * provenance check reads back off the row: a publisher and a recogniser that each held their own
+     * copy of this format could drift, and the drift would be silent — the copy would simply stop being
+     * recognised as ours, on the one path that exists to stop an already-attenuated sound being
+     * attenuated again.
      */
     private fun displayNameFor(sourceUri: String, factor: Float): String =
-        "hypercooldown-polite-${Integer.toHexString(sourceUri.hashCode())}-${Math.round(factor * 100)}.wav"
+        PublishedCopyName.of(sourceUri, factor)
 }

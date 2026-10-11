@@ -217,6 +217,55 @@ class ChannelActuatorTest {
         assertFalse(operations.isEmpty())
     }
 
+    // ---------------------------------------------------------------- pristine provenance (sound)
+
+    @Test
+    fun `a channel carrying a copy this app published is never recorded as its pristine original`() {
+        // Root-cause §3.3 — the defect the in-process marker structurally cannot see. `ChannelActuator`
+        // refuses to record a channel that "still carries this app's own write", but that marker is
+        // this process's memory of its own writes: a copy published by an earlier install, by another
+        // process, or by the standalone `app.hypercooldown` is invisible to it. The archived store
+        // proves it happened — `shell_cmd`'s record holds our own 10 % copy
+        // (`hypercooldown-polite-4887c9f0-10 (5).wav`) as its `soundUri`, against a measured pristine
+        // of `content://settings/system/notification_sound` a day earlier. Recording that makes our
+        // damping the baseline, so POLITE scales the copy again (0.30 x 0.30 = 9 %) and the restore puts
+        // the copy back for good: the user's own sound is gone and nothing can prove it ever existed.
+        // The question is asked of the sound source — the only thing that can answer it — and it is
+        // asked *before* `store.record`, because the record is the harm.
+        val copy = "content://media/external/audio/media/8549"
+        val carriesOurCopy = snapshot(fields = channelFields(soundUri = copy))
+        val source = object : PoliteSoundSource {
+            override fun politeSoundFor(snapshot: ChannelSnapshot, factor: Float): String = "content://polite"
+            override fun isOurPublishedCopy(soundUri: String?): Boolean = soundUri == copy
+        }
+        val actuator = ChannelActuator(transport, store, source, config)
+
+        val result = actuator.apply(target, carriesOurCopy, CooldownState.POLITE)
+
+        assertTrue(
+            result is WriteResult.Failed,
+            "a channel already carrying our copy must not be damped or recorded: $result",
+        )
+        assertNull(store.snapshotFor(target.key), "our own damping may never become the pristine record")
+        assertTrue(transport.calls.isEmpty(), "and nothing may be written over it")
+    }
+
+    @Test
+    fun `the pristine refusal turns on provenance, not on the channel having a sound`() {
+        // The other half of the pin: a source that recognises nothing must leave the ordinary path
+        // exactly as it was. A guard that refused whenever a channel had a sound would refuse every
+        // channel on the device.
+        val source = object : PoliteSoundSource {
+            override fun politeSoundFor(snapshot: ChannelSnapshot, factor: Float): String = "content://polite"
+            override fun isOurPublishedCopy(soundUri: String?): Boolean = false
+        }
+        val actuator = ChannelActuator(transport, store, source, config)
+
+        assertEquals(WriteResult.Ok, actuator.apply(target, snapshot(), CooldownState.POLITE))
+        assertNotNull(store.snapshotFor(target.key))
+        assertEquals("content://polite", transport.lastEdit()!!.fields.soundUri)
+    }
+
     // ---------------------------------------------------------------- the importance lock, part A
 
     /** An actuator whose heads-up option lowers importance in both damped states. */

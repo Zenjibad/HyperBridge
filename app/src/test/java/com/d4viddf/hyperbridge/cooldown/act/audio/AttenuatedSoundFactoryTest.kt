@@ -6,6 +6,7 @@ import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import kotlin.math.abs
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -37,6 +38,38 @@ class AttenuatedSoundFactoryTest {
         factory.prewarm(snapshot(soundUri = null), factor)
 
         assertEquals(0, publisher.published.size)
+    }
+
+    @Test
+    fun `a copy whose row outlived the install is still recognised as ours`() {
+        // The durable half of the provenance question, and the reason it cannot be an in-memory
+        // registry. The write-ahead record dies with the app's own storage — a reinstall is every
+        // development iteration on this ROM, and it killed `ig_direct`'s record on 10-11 — so a marker
+        // that lives in this process cannot answer "is the sound this channel is carrying our own
+        // damping?". The MediaStore row's *name* can: it is outside the package, this app never deletes
+        // it, and the standalone `app.hypercooldown` publishes under the same name. That is what makes
+        // `ChannelActuator`'s refusal survive the reinstall it has to survive (root-cause §3.3).
+        val rowNames = mapOf(publishedUri to "hypercooldown-polite-4887c9f0-30 (5).wav")
+        val factory = factory(
+            SoundReader { null },
+            RecordingPublisher(publishedUri),
+            names = SoundNameLookup { rowNames[it] },
+        )
+
+        assertTrue(factory.isOurPublishedCopy(publishedUri))
+        assertFalse("the user's own sound is not ours", factory.isOurPublishedCopy(sourceUri))
+        assertFalse(factory.isOurPublishedCopy("content://settings/system/notification_sound"))
+        assertFalse("a channel with no sound has no copy of ours", factory.isOurPublishedCopy(null))
+        assertFalse(factory.isOurPublishedCopy(""))
+        // And the recogniser and the publisher cannot drift: the name a copy is published under is the
+        // name that identifies it. A row whose name is not ours is somebody else's sound, and is left
+        // to be treated as the pristine original.
+        assertTrue(
+            "the name this factory publishes is the name it recognises: ${PublishedCopyName.of(sourceUri, factor)}",
+            PublishedCopyName.isOurs(PublishedCopyName.of(sourceUri, factor)),
+        )
+        assertFalse(PublishedCopyName.isOurs("WaterDrop.ogg"))
+        assertFalse(PublishedCopyName.isOurs(null))
     }
 
     @Test
@@ -472,6 +505,7 @@ class AttenuatedSoundFactoryTest {
         budget: SoundBudget = SoundBudget(),
         notes: MutableList<String> = mutableListOf(),
         worker: Executor = Executor { runnable -> runnable.run() },
+        names: SoundNameLookup = SoundNameLookup { null },
     ) = AttenuatedSoundFactory(
         reader = reader,
         decoder = decoder,
@@ -480,6 +514,7 @@ class AttenuatedSoundFactoryTest {
         worker = worker,
         budget = budget,
         note = { notes += it },
+        names = names,
     )
 
     private fun snapshot(soundUri: String?) = ChannelSnapshot(

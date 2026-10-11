@@ -21,6 +21,30 @@ fun interface PoliteSoundSource {
      * this is where the number belongs.
      */
     fun politeSoundFor(snapshot: ChannelSnapshot, factor: Float): String?
+
+    /**
+     * Whether [soundUri] is a copy **this source published** for POLITE, rather than a sound the user
+     * or the origin app owns.
+     *
+     * The publisher is the only thing that can answer this, which is why the question lives here
+     * rather than in a registry of its own. It is asked by `ChannelActuator` *before* a pristine
+     * snapshot is taken, because a channel already carrying our damping is not the user's original: a
+     * record taken from it makes our attenuation the baseline — the next POLITE scales an already
+     * scaled copy (0.30 x 0.30 = 9 %) and the restore puts the copy back for good. On this device that
+     * happened for `com.android.shell/shell_cmd`, whose archived record holds our own 10 % copy as its
+     * `soundUri` (root-cause §3.3).
+     *
+     * The in-process write marker in `ChannelActuator` cannot cover this: it is this process's memory
+     * of its own writes, so it knows nothing about a copy an earlier install, another process or the
+     * standalone `app.hypercooldown` published — the cross-writer route, and on this ROM the *usual*
+     * one, because every development iteration is a reinstall.
+     *
+     * Answers `false` by default, which is the honest answer for a source that publishes nothing
+     * ([NoPoliteSound]) and for every test double. The default is deliberately the *permissive* one:
+     * this is a provenance question about a URI, and a source that cannot answer it must not be read as
+     * "everything is ours", which would refuse to damp every channel on the device.
+     */
+    fun isOurPublishedCopy(soundUri: String?): Boolean = false
 }
 
 /**

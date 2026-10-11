@@ -10,6 +10,7 @@ import com.d4viddf.hyperbridge.cooldown.act.audio.AndroidSoundUriResolver
 import com.d4viddf.hyperbridge.cooldown.act.audio.AttenuatedSoundFactory
 import com.d4viddf.hyperbridge.cooldown.act.audio.ContentResolverSoundReader
 import com.d4viddf.hyperbridge.cooldown.act.audio.MediaCodecAudioDecoder
+import com.d4viddf.hyperbridge.cooldown.act.audio.MediaStoreSoundNameLookup
 import com.d4viddf.hyperbridge.cooldown.act.audio.MediaStoreSoundPublisher
 import com.d4viddf.hyperbridge.cooldown.act.audio.SoundBudget
 import com.d4viddf.hyperbridge.cooldown.act.audio.SoundCopyCache
@@ -232,6 +233,11 @@ class CooldownRuntime private constructor(private val context: Context) {
         budget = soundBudget,
         // Every refusal is named in the same `adb logcat -s Cooldown:V` stream as the post it belongs to.
         note = { reason -> Log.w(TAG, "polite sound unavailable: $reason") },
+        // The durability half of "is this sound one of our own copies?". `SoundCopyCache` above answers
+        // it for this process only, and this ROM's development loop destroys the process, the install
+        // and the write-ahead record together — the reinstall that took `ig_direct`'s record on 10-11.
+        // The published row's name is the one piece of provenance that a fresh install can still read.
+        names = MediaStoreSoundNameLookup(context),
     )
 
     /**
