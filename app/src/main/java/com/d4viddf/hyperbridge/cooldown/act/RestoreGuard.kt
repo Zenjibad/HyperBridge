@@ -47,12 +47,15 @@ import app.hypercooldown.actuation.ChannelFields
  * repeated the decimal reading is corrected by Plan 3 Task 2. [forWrite] reproduces the measured `0x30`
  * for a channel that had both a sound and vibration, which is the cross-check the device run gave.
  *
- * The values come back exactly; this mask does not, and nothing this app can call clears it.
- * `unlockNotificationChannel` (transaction 43) is shell-reachable, but the ROM routes it to
- * `PreferencesHelper.unlockNotificationChannelImportance` (`research/aosp/PreferencesHelper.java:1230`),
- * which clears `USER_LOCKED_IMPORTANCE` (4) only, while the residue a damping write leaves is `0x30`;
- * `unlockAllNotificationChannels` requires `checkCallerIsSystem()` and is not reachable at all. See
- * [RestoreGuard.verdict] for the sentence the UI shows because of it.
+ * The values come back exactly; this mask does not, and nothing this app can call clears **the sound and
+ * the vibration bits**. `unlockNotificationChannel` (transaction 43) is shell-reachable, but the ROM
+ * routes it to `PreferencesHelper.unlockNotificationChannelImportance`
+ * (`research/aosp/PreferencesHelper.java:1230`), which clears `USER_LOCKED_IMPORTANCE` (4) only, while the
+ * residue a damping write leaves on sound and vibration is `0x30`;
+ * `unlockAllNotificationChannels` requires `checkCallerIsSystem()` and is not reachable at all. Importance
+ * **is** released, and it is the only bit that is: the app sends 43 after every restore whose write moved
+ * importance, so a mask that counted it would report a residue the user does not have. See
+ * [RestoreGuard.verdict] for the sentence the UI shows because of the rest.
  */
 object LockResidue {
 
@@ -197,10 +200,13 @@ data class RestoredWrite(val cooldownKey: String, val channelId: String, val der
  *    every other field the snapshot captured go back to what the app had;
  *  - the lock **mask** on that channel id stays non-zero, and this app cannot clear it. Only the
  *    owning app re-creating its channel, or a delete, resets it;
- *  - `unlockNotificationChannel` (transaction 43) cannot help: the ROM routes it to
+ *  - `unlockNotificationChannel` (transaction 43) cannot clear these bits: the ROM routes it to
  *    `PreferencesHelper.unlockNotificationChannelImportance`, which clears `USER_LOCKED_IMPORTANCE`
- *    (4) only, while the residue this app leaves is `USER_LOCKED_VIBRATION|USER_LOCKED_SOUND` (`0x30`);
- *    `unlockAllNotificationChannels` requires `checkCallerIsSystem()` and is not reachable at all;
+ *    (4) only, while the residue this app leaves on sound and vibration is
+ *    `USER_LOCKED_VIBRATION|USER_LOCKED_SOUND` (`0x30`);
+ *    `unlockAllNotificationChannels` requires `checkCallerIsSystem()` and is not reachable at all.
+ *    Importance is the exception and is released — which is why the derived mask subtracts it — so the
+ *    residue this guard is about is exactly the unreleasable part;
  *  - therefore **this app must never claim a restored channel is pristine.** [verdict] is the sentence
  *    the UI shows instead.
  *
@@ -269,9 +275,10 @@ class RestoreGuard(private val nowMs: () -> Long = System::currentTimeMillis) {
      * It says which unit each count is in — the last restore's record keys, which is one channel each,
      * and the channels this process has restored in total — because those two numbers disagree the
      * moment a second restore happens, and a guard whose arithmetic cannot be read is a guard nobody
-     * can act on. "Derived" and "a lower bound" are in the sentence, and so is the fact that nothing
-     * this app can call clears the bits: `unlockNotificationChannel` (transaction 43) is shell-reachable
-     * and clears only the importance bit, and `unlockAllNotificationChannels` requires system.
+     * can act on. "Derived" and "a lower bound" are in the sentence, and so is the fact that the bits
+     * this app leaves behind are the ones it cannot clear: `unlockNotificationChannel` (transaction 43)
+     * clears the importance bit and is sent after every restore that moved importance, so what is left
+     * is sound and vibration, and `unlockAllNotificationChannels` requires system.
      */
     @Synchronized
     fun verdict(): String {
@@ -307,9 +314,9 @@ class RestoreGuard(private val nowMs: () -> Long = System::currentTimeMillis) {
                     "the platform also inherits every lock bit the channel already carried$unknownNote"
             } else {
                 "$head; none of the ${entries.size} channel(s) restored in this process locks more " +
-                    "than importance$masks; unlockNotificationChannel (transaction 43) could clear that " +
-                    "bit, but this app never sends it, and unlockAllNotificationChannels requires " +
-                    "system$unknownNote"
+                    "than importance$masks; unlockNotificationChannel (transaction 43) clears that " +
+                    "bit and this app sends it after every restore, so the channel is expected to read " +
+                    "0x0 here — and unlockAllNotificationChannels requires system$unknownNote"
             }
         }
         return "$head; ${blocked.size} of the ${entries.size} channel(s) restored in this process " +
@@ -317,7 +324,8 @@ class RestoreGuard(private val nowMs: () -> Long = System::currentTimeMillis) {
             "exactly, but the lock mask stays non-zero until the app or the user deletes and " +
             "re-creates the channel, and the derived value is a lower bound because the platform also " +
             "inherits every lock bit the channel already carried$unknownNote. unlockNotificationChannel " +
-            "(transaction 43) is shell-reachable and clears only the importance bit; " +
+            "(transaction 43) clears the importance bit only, and this app already releases that one " +
+            "after every restore, so it cannot help with the bits named above; " +
             "unlockAllNotificationChannels requires system."
     }
 

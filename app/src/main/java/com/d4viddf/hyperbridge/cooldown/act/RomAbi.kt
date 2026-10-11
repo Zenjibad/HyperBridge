@@ -24,32 +24,41 @@ object RomAbi {
     const val UPDATE_NOTIFICATION_CHANNEL_FOR_PACKAGE = 42
 
     /**
-     * `unlockNotificationChannel(String pkg, int uid, String channelId)`. Pinned, because Task 9 pins
-     * the ABI it was read from, and **deliberately never called**. Plan 3 Task 2 re-checked the reason
-     * against Q2 and against the measurement, and states it in full:
+     * `unlockNotificationChannel(String pkg, int uid, String channelId)` — sent by
+     * [ShizukuTransport.unlockImportance], after a restore write and only for a record whose last
+     * write moved the importance.
      *
-     *  - **It cannot do the job.** The ROM routes it to
+     * Pinned, because Task 9 pins the ABI it was read from. The reasoning below is **kept, and its
+     * conclusion reversed in exactly one place**, which is the honest way to record it: every bullet
+     * still holds for the residue the sound and the vibration leave, and that is the residue which is
+     * still unreleasable. What changed is that importance *is* now written — the heads-up option lowers
+     * `HIGH` to `DEFAULT` (`EditFactory.demotedImportance`) — so the one bit this transaction clears is
+     * now a bit this app sets, and not calling it would be the "all downside, no upside" the old
+     * conclusion warned about, in reverse:
+     *
+     *  - **It cannot clear the sound or the vibration bit.** The ROM routes it to
      *    `PreferencesHelper.unlockNotificationChannelImportance`, which clears `USER_LOCKED_IMPORTANCE`
      *    (4) and nothing else. The residue a cooldown write leaves on this device is
      *    `mUserLockedFields=30` — **hexadecimal**, per the ROM's own `toString`, which formats this
      *    field with `Integer.toHexString` — i.e. `0x30` = `USER_LOCKED_VIBRATION|USER_LOCKED_SOUND`
-     *    (`0x10|0x20` = 48). Neither bit is 4, so calling 43 would leave the mask exactly as it is and
-     *    the channel still observably not the user's own.
-     *  - **Its only effect is on a bit this app does not set and cannot attribute.** A cooldown write
-     *    never touches importance (spec §5.4 keeps it), and the measured residue confirms it: no bit 4.
-     *    But `PreferencesHelper` starts from
-     *    `updatedChannel.lockFields(existing.getUserLockedFields())`, so a mask *inherits* whatever the
-     *    channel already had — a bit 4 in a mask may be the user's own importance lock set in
-     *    Settings, and 43 would silently drop that preference. All downside, no upside.
-     *  - **Nothing else can clear it either.** `unlockAllNotificationChannels`, the only call that
+     *    (`0x10|0x20` = 48). Neither bit is 4, so a restore still leaves the mask with those bits set
+     *    and the channel still observably not the user's own. That is what [LockResidue] and
+     *    [RestoreGuard.verdict] say, and it is unchanged.
+     *  - **A mask inherits.** `PreferencesHelper` starts from
+     *    `updatedChannel.lockFields(existing.getUserLockedFields())`, so a bit 4 in a mask may be the
+     *    user's own importance lock set in Settings, and 43 would drop that preference too. That risk is
+     *    now bounded rather than hypothetical: the call is made **only** for a record whose own last
+     *    write moved the importance (`ChannelActuator.restore`), i.e. only where this app is the one that
+     *    locked it. A channel nobody damped is never unlocked.
+     *  - **Nothing else can clear the other bits.** `unlockAllNotificationChannels`, the only call that
      *    would clear `0x10|0x20`, requires `checkCallerIsSystem` and is unreachable from shell and from
      *    a Shizuku-bound app.
      *
-     * So the residue stands until the owning app deletes and re-creates its channel, and this app says
-     * so instead of sending a transaction that cannot help: [LockResidue] and [RestoreGuard.verdict].
-     * Task 2 Step 7 proves this constant has no call site, and the read-back that once accompanied it is
-     * gone too — the platform never delivers the channel-modified callback to a plain listener on this
-     * ROM, so the residue is derived from the write instead of read back (see [LockResidue]).
+     * The sound/vibration residue therefore stands until the owning app deletes and re-creates its
+     * channel, and this app says so instead of sending a transaction that cannot help. The read-back
+     * that once accompanied this constant is still gone: the platform never delivers the
+     * channel-modified callback to a plain listener on this ROM, so the residue is derived from the
+     * write instead of read back (see [LockResidue]).
      */
     const val UNLOCK_NOTIFICATION_CHANNEL = 43
 

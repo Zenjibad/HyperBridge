@@ -20,6 +20,7 @@ import app.hypercooldown.actuation.ChannelTransport
 import app.hypercooldown.actuation.CooldownCoordinator
 import app.hypercooldown.actuation.CooldownKeys
 import app.hypercooldown.actuation.CooldownOptions
+import app.hypercooldown.actuation.CooldownPolicy
 import app.hypercooldown.actuation.Exemption
 import app.hypercooldown.actuation.Presentation
 import app.hypercooldown.actuation.PropertiesSnapshotStore
@@ -117,7 +118,19 @@ class CooldownRuntime private constructor(private val context: Context) {
     private fun buildCoordinator(config: EngineConfig, transport: ChannelTransport): CooldownCoordinator =
         CooldownCoordinator(
             config = config,
-            actuator = ChannelActuator(transport, store, politeSound, config),
+            actuator = ChannelActuator(
+                transport,
+                store,
+                politeSound,
+                config,
+                // The heads-up option is per **app** while an actuator is per *config*, so it is handed
+                // over as a function of the package and read at write time: two apps that share a config
+                // must not share an answer, and a change in the options has to take effect on the next
+                // post without rebuilding a coordinator (which would take its armed wake-ups with it,
+                // spec §6). `CooldownPolicy.headsUp` is the one place the unset-option default is
+                // resolved, so the write path and the island decision cannot disagree about it.
+                headsUpFor = { packageName -> CooldownPolicy.headsUp(optionsFor(packageName)) },
+            ),
             clock = AndroidClock,
             timer = timer,
         )
@@ -249,12 +262,21 @@ class CooldownRuntime private constructor(private val context: Context) {
      * pristine content as this app captured it, and the content its last write put there. [written] is
      * null when the process died between the transport accepting a write and the marker reaching disk,
      * which is reported as an unknown residue rather than as no residue.
+     *
+     * **The importance bit is subtracted when this app is about to release it.** It is the one bit
+     * transaction 43 clears, `ChannelActuator.restore` sends it for exactly the records whose write
+     * moved the importance, and a mask that still counted it would report a residue the user does not
+     * have — a false alarm about our own safety net, in the direction that makes the sentence useless.
+     * When the transport cannot send 43 the bit is counted, because then nobody clears it.
      */
     private fun derivedResidueOf(record: SnapshotStore.Record): RestoredWrite =
         RestoredWrite(
             cooldownKey = record.target.key,
             channelId = record.snapshot.fields.channelId,
-            derivedMask = record.written?.let { LockResidue.forWrite(record.snapshot.fields, it) },
+            derivedMask = record.written?.let { written ->
+                val derived = LockResidue.forWrite(record.snapshot.fields, written)
+                if (transport?.canUnlockImportance == true) LockResidue.unreleasable(derived) else derived
+            },
         )
 
     @Synchronized

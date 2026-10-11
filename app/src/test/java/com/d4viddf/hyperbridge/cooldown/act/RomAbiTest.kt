@@ -34,6 +34,20 @@ class RomAbiTest {
     }
 
     @Test
+    fun `the unlock takes a package, a uid and a channel id, in that order`() {
+        // The code above is only half of the ABI. A transaction is a parcel, and a code that dispatched
+        // to the right method with the arguments written in the wrong order would pass a mangled parcel
+        // to `unlockNotificationChannelImportance` — and `ShizukuTransport.unlockImportance` writes them
+        // by hand. The extract carries the proxy's own signature, so the order is pinned rather than
+        // assumed: `String pkg, int uid, String channelId`.
+        val signature = dump
+            .substringAfter("$PROXY.unlockNotificationChannel:")
+            .substringBefore("\n")
+            .trim()
+        assertEquals("(Ljava/lang/String;ILjava/lang/String;)V", signature)
+    }
+
+    @Test
     fun `the privileged-listener variant transacts with the pinned code`() {
         assertEquals(
             RomAbi.UPDATE_NOTIFICATION_CHANNEL_FROM_PRIVILEGED_LISTENER,

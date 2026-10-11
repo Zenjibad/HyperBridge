@@ -31,6 +31,66 @@ class ShizukuTransport(private val mapper: AndroidChannelMapper) : ChannelTransp
 
     override val name: String = "shizuku"
 
+    /**
+     * Shell can send transaction 43, and this is the only transport that can: `NotificationListenerService`
+     * exposes no unlock, and the second half of "a lowered importance is recoverable" depends on this
+     * being true wherever importance is written.
+     */
+    override val canUnlockImportance: Boolean = true
+
+    /**
+     * `unlockNotificationChannel(String pkg, int uid, String channelId)` — transaction 43, the only
+     * method on this ROM that clears `USER_LOCKED_IMPORTANCE` (4) and nothing else (Q2: the ROM routes
+     * it to `PreferencesHelper.unlockNotificationChannelImportance`).
+     *
+     * Sent by hand on a `Parcel` for exactly the reasons [write] is: the code is pinned to the
+     * disassembly extract, `interfaceDescriptor` is checked first, and the guard refuses on an
+     * unrecognised fingerprint. The argument order is the extract's own signature,
+     * `(Ljava/lang/String;ILjava/lang/String;)V`, pinned by `RomAbiTest`.
+     *
+     * Called from `ChannelActuator.restore` **after** the restore write, and only for a record whose
+     * last write moved the importance: `lockFieldsForUpdateLocked` locks a field whose value changed,
+     * so the write is what sets the bit.
+     */
+    override fun unlockImportance(target: ChannelTarget, channelId: String): WriteResult {
+        val pinned = RomAbiGuard.check()
+        if (pinned is WriteResult.Failed) return pinned
+
+        val service = ShizukuNotificationBinder.get()
+            ?: return WriteResult.Failed("ServiceManager.getService(\"notification\") returned null")
+
+        val descriptor = try {
+            service.interfaceDescriptor
+        } catch (e: RemoteException) {
+            return WriteResult.Failed("could not read the notification binder's descriptor: ${e.message}")
+        }
+        if (descriptor != RomAbi.DESCRIPTOR) {
+            return WriteResult.Failed("notification binder is '$descriptor', not '${RomAbi.DESCRIPTOR}'")
+        }
+
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        return try {
+            data.writeInterfaceToken(RomAbi.DESCRIPTOR)
+            data.writeString(target.packageName)
+            data.writeInt(target.uid)
+            data.writeString(channelId)
+            ShizukuBinderWrapper(service)
+                .transact(RomAbi.UNLOCK_NOTIFICATION_CHANNEL, data, reply, 0)
+            // The reply carries only an exception; reading it turns "the unlock was rejected" into a
+            // returned result rather than a silent no-op that leaves the bit set forever.
+            reply.readException()
+            WriteResult.Ok
+        } catch (e: RemoteException) {
+            WriteResult.Failed("unlockNotificationChannel failed: ${e.message}")
+        } catch (e: SecurityException) {
+            WriteResult.Failed("unlockNotificationChannel denied: ${e.message}")
+        } finally {
+            reply.recycle()
+            data.recycle()
+        }
+    }
+
     override fun write(
         target: ChannelTarget,
         snapshot: ChannelSnapshot,

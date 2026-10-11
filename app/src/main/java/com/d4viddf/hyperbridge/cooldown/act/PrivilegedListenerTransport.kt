@@ -37,6 +37,17 @@ class PrivilegedListenerTransport(
 
     override val name: String = "privileged-listener"
 
+    /**
+     * **False, and it costs the heads-up option rather than the user's lock bit.** The public
+     * `NotificationListenerService` API exposes `updateNotificationChannel` and no unlock at all, and
+     * `unlockNotificationChannel` is reachable only over the hidden binder (which is why the Shizuku
+     * transport carries transaction 43). `USER_LOCKED_IMPORTANCE` is therefore unreleasable from here,
+     * so `ChannelActuator` refuses to lower importance on this transport and reports
+     * `FidelityGap.HEADS_UP_SUPPRESS_UNRELEASABLE` instead. Everything else — sound, vibration, the
+     * island — is unaffected.
+     */
+    override val canUnlockImportance: Boolean = false
+
     override fun write(
         target: ChannelTarget,
         snapshot: ChannelSnapshot,
