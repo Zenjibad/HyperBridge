@@ -143,6 +143,11 @@ class CooldownPolicyTest {
 
         val muted = CooldownPolicy.effects(untouched, CooldownState.MUTED)
         assertEquals(SoundOption.SILENT, muted.sound)
+        // A silent alert that still buzzed would not be silent. `EditFactory` already clears the
+        // vibration flag for MUTED and AOSP's `NotificationRecord.getVibrationForChannel` returns null
+        // when `!channel.shouldVibrate()` (`research/aosp/NotificationRecord.java:320`), so `OFF` is
+        // what an unset silent-phase vibration option has always meant.
+        assertEquals(VibrationOption.OFF, muted.vibration)
         assertEquals(HeadsUpOption.SUPPRESS, muted.headsUp)
 
         val polite = CooldownPolicy.effects(untouched, CooldownState.POLITE)
@@ -153,9 +158,14 @@ class CooldownPolicyTest {
 
     @Test
     fun `an explicit choice still wins over the default in either direction`() {
-        val chosen = CooldownOptions(soundMuted = SoundOption.INHERIT, headsUpMuted = HeadsUpOption.INHERIT)
+        val chosen = CooldownOptions(
+            soundMuted = SoundOption.INHERIT,
+            vibrationMuted = VibrationOption.INHERIT,
+            headsUpMuted = HeadsUpOption.INHERIT,
+        )
         val muted = CooldownPolicy.effects(chosen, CooldownState.MUTED)
         assertEquals(SoundOption.INHERIT, muted.sound)
+        assertEquals(VibrationOption.INHERIT, muted.vibration)
         assertEquals(HeadsUpOption.INHERIT, muted.headsUp)
     }
 

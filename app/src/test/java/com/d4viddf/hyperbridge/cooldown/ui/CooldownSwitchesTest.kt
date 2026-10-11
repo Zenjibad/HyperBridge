@@ -3,6 +3,7 @@ package com.d4viddf.hyperbridge.cooldown.ui
 import app.hypercooldown.actuation.CooldownOptions
 import app.hypercooldown.actuation.HeadsUpOption
 import app.hypercooldown.actuation.SoundOption
+import app.hypercooldown.actuation.VibrationOption
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -28,6 +29,7 @@ class CooldownSwitchesTest {
     @Test
     fun `the rows whose copy says "On by default" are on`() {
         assertTrue(CooldownSwitches.mutedSilentSound(untouched))
+        assertTrue(CooldownSwitches.mutedVibrationOff(untouched))
         assertTrue(CooldownSwitches.mutedHeadsUpSuppressed(untouched))
     }
 
@@ -44,9 +46,11 @@ class CooldownSwitchesTest {
     fun `an explicit choice still wins over the default in either direction`() {
         val off = untouched.copy(
             soundMuted = SoundOption.INHERIT,
+            vibrationMuted = VibrationOption.INHERIT,
             headsUpMuted = HeadsUpOption.INHERIT,
         )
         assertFalse(CooldownSwitches.mutedSilentSound(off))
+        assertFalse(CooldownSwitches.mutedVibrationOff(off))
         assertFalse(CooldownSwitches.mutedHeadsUpSuppressed(off))
         assertTrue(CooldownSwitches.politeSilentSound(untouched.copy(soundPolite = SoundOption.SILENT)))
     }

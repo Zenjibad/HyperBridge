@@ -66,7 +66,9 @@ object CooldownPolicy {
      * `soundUri = null` for MUTED and clears the vibration flag (`MUTED -> vibrationEnabled = false`),
      * and AOSP itself is the same — `NotificationRecord.getVibrationForChannel` returns `null` when
      * `!channel.shouldVibrate()` (`research/aosp/NotificationRecord.java:320`). A silent alert that
-     * still buzzed would not be silent.
+     * still buzzed would not be silent, which is what `vibrationMuted`'s default of `OFF` now says:
+     * the row beside it has promised exactly that all along — "On by default: a repeating alert does
+     * not vibrate" — and the write path was already doing it.
      *
      * The banner is the one place the state and AOSP disagree: MUTED keeps the heads-up, so the last
      * attention effect would still take the screen — the one deviation the option set offers, and the
@@ -90,7 +92,7 @@ object CooldownPolicy {
 
         CooldownState.MUTED -> CooldownEffects(
             sound = options.soundMuted ?: SoundOption.SILENT,
-            vibration = options.vibrationMuted ?: VibrationOption.INHERIT,
+            vibration = options.vibrationMuted ?: VibrationOption.OFF,
             headsUp = options.headsUpMuted ?: HeadsUpOption.SUPPRESS,
             island = options.islandMuted ?: IslandOption.INHERIT,
         )
