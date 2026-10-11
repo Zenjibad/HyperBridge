@@ -16,7 +16,6 @@ import androidx.compose.material.icons.outlined.DoNotDisturbOn
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Timer
-import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VolumeOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -146,8 +145,6 @@ fun CooldownOptionsEditor(
     // row and every per-app row, and a `remember`ed copy would let one screen hide the note while the
     // other still showed it.
     val noteRead = options.headsUpSuppressionAcknowledged == true
-    val context = LocalContext.current
-    val runtime = remember { CooldownRuntime.get(context.applicationContext) }
 
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
@@ -535,42 +532,6 @@ fun CooldownOptionsEditor(
                     onCheckedChange = {
                         onUpdate(options.copy(headsUpSuppressionAcknowledged = it))
                     }
-                )
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        // ---- Visibility: stated, not offered. See the sentence. ----
-        ExpandableSettingCard(
-            title = stringResource(R.string.cooldown_section_visibility),
-            icon = Icons.Outlined.Visibility,
-        ) {
-            Column {
-                SettingsToggleCard(
-                    title = stringResource(R.string.cooldown_visibility_keep_title),
-                    subtitle = stringResource(R.string.cooldown_visibility_keep_subtitle),
-                    icon = Icons.Outlined.Visibility,
-                    checked = true,
-                    enabled = false,
-                    shape = getExpressiveShape(2, 0, ShapeStyle.Large),
-                    onCheckedChange = {}
-                )
-                Spacer(Modifier.height(2.dp))
-                SettingsToggleCard(
-                    title = stringResource(R.string.cooldown_visibility_hide_title),
-                    subtitle = runtime.visibilityUnsupportedNote(),
-                    icon = Icons.Outlined.Visibility,
-                    checked = false,
-                    enabled = false,
-                    shape = getExpressiveShape(2, 1, ShapeStyle.Large),
-                    onCheckedChange = {}
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = stringResource(R.string.cooldown_visibility_deferred_message),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

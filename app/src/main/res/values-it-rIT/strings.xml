@@ -653,10 +653,6 @@
 
     <string name="cooldown_section_heads_up">Heads-up</string>
 
-    <string name="cooldown_section_visibility">Shade entry</string>
-    <string name="cooldown_visibility_keep_title">Keep visible in the shade</string>
-    <string name="cooldown_visibility_keep_subtitle">Android\'s behaviour, and what this app always does: only the alert\'s attention effects are damped.</string>
-    <string name="cooldown_visibility_hide_title">Hide entirely</string>
 
 
     <string name="cooldown_second_writer_title">Two cooldown apps on one device</string>

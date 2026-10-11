@@ -897,11 +897,6 @@
     <string name="cooldown_heads_up_silent_title">Hide the banner for a silent alert</string>
     <string name="cooldown_heads_up_silent_subtitle">On by default: a silent alert has no sound and no vibration, so the banner is the only attention left - and Android still shows it.</string>
 
-    <string name="cooldown_section_visibility">Shade entry</string>
-    <string name="cooldown_visibility_keep_title">Keep visible in the shade</string>
-    <string name="cooldown_visibility_keep_subtitle">Android\'s behaviour, and what this app always does: only the alert\'s attention effects are damped.</string>
-    <string name="cooldown_visibility_hide_title">Hide entirely</string>
-    <string name="cooldown_visibility_deferred_message">Hiding the notification itself is not offered. The only lever is a locked visibility write with the same kind of cost as the importance change above, and it is never done by cancelling: cancelling would also kill the watch relay companion apps depend on, and the alert has already played by the time this app sees it.</string>
 
     <string name="cooldown_section_exempt">Never made quieter</string>
     <string name="cooldown_exempt_message">Calls, alarms, reminders and events, and important conversations are never made quieter, on any channel: they are kept out of the cooldown entirely, so they cannot affect the timing of anything else either. Ongoing and foreground-service notifications are skipped for the same reason, and the per-app switch is the fifth exemption.</string>
