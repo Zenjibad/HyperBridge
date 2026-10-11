@@ -18,11 +18,13 @@ import app.hypercooldown.engine.CooldownState
  *    `createDefaultVibration()`, so a channel with vibration enabled but no explicit effect or
  *    pattern still buzzes.
  *
- * [stateFor] identifies a state by what it would play, which is only unambiguous for a channel that
- * has a sound to lose: the fixture channel does (sound `content://settings/system/notification_sound`
- * plus a vibration pattern), so DEFAULT (sound), POLITE (vibration only) and MUTED (neither) are
- * distinguishable. A channel with no sound would make DEFAULT and POLITE look alike; keeping the
- * fixture audible is what makes the oracle faithful.
+ * [stateFor] identifies a state by what it would play: MUTED is nothing at all, and POLITE is the
+ * channel's sound beside a *damped* vibration. Since 2026-10-11 that vibration is the only thing that
+ * tells POLITE from DEFAULT, because a POLITE write with no attenuated copy to install now leaves the
+ * channel's own sound in place rather than clearing it — clearing it is what stranded
+ * `com.instagram.android/ig_direct` (root-cause §3.5, §4). So a channel carrying a sound and the
+ * fixture's own full-amplitude pattern is DEFAULT, and one carrying a sound beside any other pattern,
+ * or none, is POLITE.
  *
  * [deriveVibrationEffect] turns this device into the one this app was actually measured against; see
  * [DerivingChannelDevice].
@@ -80,10 +82,16 @@ open class FakeChannelDevice(
 
     fun stateFor(packageName: String): CooldownState {
         val fields = channels[packageName to channelId] ?: return CooldownState.DEFAULT
+        val pristine = channelFields(channelId = channelId)
         return when {
-            fields.soundUri != null -> CooldownState.DEFAULT
-            fields.vibrationEnabled -> CooldownState.POLITE
-            else -> CooldownState.MUTED
+            // Nothing to play at all: MUTED is the only state that installs neither a sound nor a
+            // vibration (`EditFactory`), so this is not ambiguous with anything else.
+            fields.soundUri == null && !fields.vibrationEnabled -> CooldownState.MUTED
+            // A sound beside the channel's own untouched vibration. `politePattern` is what our
+            // POLITE write leaves here, so comparing the two is what tells POLITE's 30 % vibration
+            // from DEFAULT's full one.
+            fields.soundUri == pristine.soundUri && fields.vibrationPattern == pristine.vibrationPattern -> CooldownState.DEFAULT
+            else -> CooldownState.POLITE
         }
     }
 

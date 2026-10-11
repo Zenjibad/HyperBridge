@@ -24,9 +24,14 @@ fun interface PoliteSoundSource {
 }
 
 /**
- * Plan 2's source: no copy is produced, so POLITE damps the vibration only and records
- * [FidelityGap.POLITE_SOUND_UNAVAILABLE] — spec §5.6's degradation row for a sound that cannot be
- * read.
+ * Plan 2's source: no copy is produced, so POLITE damps the vibration only, leaves the channel's own
+ * sound exactly where it was, and records [FidelityGap.POLITE_SOUND_UNAVAILABLE].
+ *
+ * Leaving the sound alone — rather than clearing it — is the whole of spec §5.6's degradation rule as
+ * the device forced it to be read: a POLITE state that silences a channel cannot be recovered once the
+ * record that would undo it is gone (root-cause §3.5, §4). It publishes nothing, so it can never
+ * recognise a channel's sound as its own copy and the inherited answer to
+ * [PoliteSoundSource.isOurPublishedCopy] is the correct one.
  */
 object NoPoliteSound : PoliteSoundSource {
     override fun politeSoundFor(snapshot: ChannelSnapshot, factor: Float): String? = null

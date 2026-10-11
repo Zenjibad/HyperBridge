@@ -207,6 +207,13 @@ class ChannelActuatorTest {
         assertTrue(transport.lastEdit()!!.gaps.isEmpty())
         actuator.apply(target(key = "0:other", packageName = "other"), snapshot(), CooldownState.POLITE)
         assertTrue(FidelityGap.POLITE_SOUND_UNAVAILABLE in transport.lastEdit()!!.gaps)
+        // Reported *and* harmless: the write that records the gap carries the channel's own sound, so
+        // a copy that is not ready degrades POLITE instead of muting the channel (root-cause §3.5).
+        assertEquals(
+            channelFields().soundUri,
+            transport.lastEdit()!!.fields.soundUri,
+            "the gap must not be paid for with the channel's sound",
+        )
         assertFalse(operations.isEmpty())
     }
 
@@ -342,17 +349,19 @@ class ChannelActuatorTest {
     }
 
     @Test
-    fun `the refusal is per state, so a transport without transaction 43 still mutes`() {
+    fun `the refusal is per state, so a transport without transaction 43 still damps POLITE`() {
         transport.canUnlockImportance = false
         val suppressing = suppressingActuator()
 
         suppressing.apply(target, snapshot(), CooldownState.POLITE)
 
         // POLITE's demotion is refused but nothing else about the state moves: the head-up option is
-        // not allowed to take the sound, the vibration or the island with it.
+        // not allowed to take the sound, the vibration or the island with it. Re-derived: the old
+        // expectation here was a null sound, which is the write that muted a real channel — POLITE
+        // keeps the channel's own sound when it has no attenuated copy (root-cause §3.5).
         val fields = transport.lastEdit()!!.fields
         assertEquals(4, fields.importance)
-        assertNull(fields.soundUri)
+        assertEquals(channelFields().soundUri, fields.soundUri)
         assertEquals(listOf(0L, 77L, 200L, 77L), fields.vibrationPattern)
         assertTrue(FidelityGap.HEADS_UP_SUPPRESS_UNRELEASABLE in transport.lastEdit()!!.gaps)
     }

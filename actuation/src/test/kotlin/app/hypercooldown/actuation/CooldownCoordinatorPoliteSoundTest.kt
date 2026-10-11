@@ -70,7 +70,13 @@ class CooldownCoordinatorPoliteSoundTest {
         val outcome = post(0)
         assertEquals(CooldownState.POLITE, outcome.nextState)
         // The measured cold start: the write for the next alert is installed before the copy exists.
-        assertNull(transport.lastEdit()!!.fields.soundUri)
+        // Re-derived: this used to assert a null sound, which is the write that silenced a real
+        // channel (root-cause §3.5). A late copy degrades POLITE, it does not mute the channel.
+        assertEquals(
+            pristineSound,
+            transport.lastEdit()!!.fields.soundUri,
+            "a copy that is not built yet must leave the channel's own sound alone",
+        )
         assertTrue(FidelityGap.POLITE_SOUND_UNAVAILABLE in transport.lastEdit()!!.gaps)
         assertTrue(FidelityGap.POLITE_SOUND_UNAVAILABLE in outcome.gaps)
 
@@ -91,6 +97,27 @@ class CooldownCoordinatorPoliteSoundTest {
             polite.asked,
             "the re-apply attenuates the user's sound again, never the copy the channel now carries",
         )
+    }
+
+    @Test
+    fun `the first POLITE write of a process leaves the channel audible, so its cooldown can progress`() {
+        // Root-cause §3.6, the fixed point that stranded `ig_direct` on the device: a channel with no
+        // sound produces no audible alert, so the next arrival reads as silent, the engine never
+        // advances, and the fork will neither re-damp the channel nor restore it -- it has nothing to
+        // restore. Keeping the channel's own sound on the first POLITE write of a process is what
+        // breaks that loop: the next alert arrives audible, so the engine installs MUTED on schedule
+        // and the relaxation brings the channel back on its own.
+        post(0)
+        assertEquals(
+            pristineSound,
+            transport.observed().fields.soundUri,
+            "a late copy must not make the channel silent to the platform",
+        )
+
+        val second = post(4_000)
+
+        assertEquals(CooldownState.POLITE, second.installedState, "the second alert arrived audible")
+        assertEquals(CooldownState.MUTED, second.nextState, "so the engine advanced to MUTED")
     }
 
     @Test

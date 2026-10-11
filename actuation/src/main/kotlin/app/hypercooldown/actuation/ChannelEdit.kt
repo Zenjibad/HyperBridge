@@ -7,9 +7,22 @@ package app.hypercooldown.actuation
  */
 enum class FidelityGap {
     /**
-     * POLITE had to go without a sound, because producing the 30 %-amplitude copy is
-     * `AttenuatedSoundFactory` and that is Plan 3's. The channel is played vibration-only, which is
-     * spec §5.6's stated behaviour for a sound that cannot be read or decoded.
+     * POLITE had no 30 %-amplitude copy of the channel's sound to install, so the sound half of the
+     * damping did not happen: the channel keeps the sound it already had, and the vibration is still
+     * scaled. Raised when the copy is not built yet (`AttenuatedSoundFactory` builds it on a worker)
+     * or cannot be built at all (unreadable, undecodable, or a source that is itself a copy this app
+     * published).
+     *
+     * Deliberately *not* raised for `SoundOption.SILENT`: a POLITE volume of zero is the user asking
+     * for a silent second alert, so that silence is the intent rather than a degradation, and nothing
+     * is decoded to be thrown away. The two are told apart by this gap, by the written `soundUri`
+     * (null versus the channel's own), and by the `AttenuatedSoundFactory` note that names the source
+     * it could not attenuate.
+     *
+     * It is never paid for with the channel's sound. Writing `soundUri = null` here is what left
+     * `com.instagram.android/ig_direct` silent and stranded on 2026-10-11 — the POLITE state's safety
+     * would have rested on the write-ahead record, and a reinstall destroys the record
+     * (`docs/superpowers/decisions/2026-10-09-stranded-muted-channel-root-cause.md` §3.5, §4).
      */
     POLITE_SOUND_UNAVAILABLE,
 

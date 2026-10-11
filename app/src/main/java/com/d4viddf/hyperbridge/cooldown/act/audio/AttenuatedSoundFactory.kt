@@ -25,9 +25,11 @@ import java.util.concurrent.Executor
  *     MediaStore notification row, the recipe Q1 verified on this device.
  *
  * **Nothing here ever publishes an un-attenuated sound.** A copy that cannot be scaled is a null, which
- * `EditFactory` turns into `FidelityGap.POLITE_SOUND_UNAVAILABLE` when the channel had a sound: a full
- * -volume alert would be worse than silence for this feature, so there is no path that skips
- * [WavAttenuator].
+ * `EditFactory` turns into `FidelityGap.POLITE_SOUND_UNAVAILABLE` when the channel had a sound: for
+ * that alert the channel keeps its own sound un-damped rather than being made quieter by an untouched
+ * one — and it is *not* silenced either, because a POLITE write that cleared the sound is exactly what
+ * stranded `com.instagram.android/ig_direct` on 2026-10-11 (root-cause §3.5, §4). There is no path that
+ * skips [WavAttenuator].
  *
  * **The work runs on [worker], never on the caller's thread.** `politeSoundFor` is called from
  * `EditFactory` on the notification listener's callback thread — the main thread — and decoding an Ogg

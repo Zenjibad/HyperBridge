@@ -39,10 +39,23 @@ object EditFactory {
                 // config is re-derived from the live option set by the caller (`CooldownRuntime`'s
                 // `configFor`), so nothing here can serve the value the process started with.
                 val copy = politeSound.politeSoundFor(snapshot, config.politeVolume)
-                if (copy == null && source.soundUri != null) {
-                    gaps += FidelityGap.POLITE_SOUND_UNAVAILABLE
+                if (copy != null) {
+                    copy
+                } else {
+                    // The copy is not there. That is a *degradation*, and writing silence is not the
+                    // way to degrade: silence is MUTED's job, a state the engine installs on its own
+                    // schedule with a record behind it, and a POLITE state that silences a channel is
+                    // unsafe by construction -- its safety would rest on the write-ahead record, and a
+                    // reinstall destroys the record while leaving the silence behind. It did exactly
+                    // that on this device: `com.instagram.android/ig_direct` was left at importance 4
+                    // with `mSound=null` by a POLITE write carrying a null URI
+                    // (docs/superpowers/decisions/2026-10-09-stranded-muted-channel-root-cause.md §3.5,
+                    // §4). So the channel's own sound stays exactly where it is -- a late copy makes
+                    // POLITE quieter in vibration only -- and the gap says the sound half did not
+                    // happen. Nothing is written that the snapshot did not already carry.
+                    if (source.soundUri != null) gaps += FidelityGap.POLITE_SOUND_UNAVAILABLE
+                    source.soundUri
                 }
-                copy
             }
         }
 

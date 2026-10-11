@@ -81,7 +81,10 @@ class CooldownCoordinatorTest {
         clock.nowMs = 4_000 + config.timeoutMutedMs + 1
         coordinator.onRelaxationDue(target.key)
         assertEquals(CooldownState.POLITE, coordinator.installedFor(target.key))
-        assertNull(transport.lastEdit()!!.fields.soundUri)
+        // Re-derived: the relaxation installs POLITE, and POLITE leaves the channel's own sound in
+        // place when no attenuated copy exists (root-cause §3.5 — the old expectation here was a null
+        // sound, which is the write that muted a real channel). The vibration is what POLITE damps.
+        assertEquals(channelFields().soundUri, transport.lastEdit()!!.fields.soundUri)
         assertTrue(transport.lastEdit()!!.fields.vibrationEnabled)
     }
 

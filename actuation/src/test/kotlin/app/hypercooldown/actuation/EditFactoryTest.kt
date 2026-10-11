@@ -27,7 +27,7 @@ class EditFactoryTest {
     }
 
     @Test
-    fun `a POLITE volume of zero is the silence that was asked for, not a missing copy`() {
+    fun `the silence the user asked for is distinguishable from the copy that was missing`() {
         // "Make the second alert silent" is `SoundOption.SILENT`, which `CooldownOptions.effectiveConfig`
         // realises as `politeVolume = 0`, and the screen's own volume field says 0 % is the same as
         // switching that row off. This is the one way that setting reaches the write path, so it must be
@@ -53,19 +53,55 @@ class EditFactoryTest {
         )
         assertTrue(result.gaps.isEmpty(), "silence on purpose is not a fidelity gap: ${result.gaps}")
         assertTrue(asked.isEmpty(), "nothing may be decoded to be thrown away")
+
+        // And the contrast this test exists for: the same channel, the same state, with a copy that is
+        // simply not built *yet*. That is a degradation rather than a request, so it must not reach the
+        // same outcome. The two are distinguishable in the code -- a copy that is unavailable is not a
+        // copy that is absent -- and in the log, because only the degradation carries a gap
+        // (`CooldownRuntime` prints `fidelity gaps ...` and nothing for the deliberate silence).
+        val missing = edit(CooldownState.POLITE, PoliteSoundSource { _, _ -> null })
+        assertEquals(
+            original.fields.soundUri,
+            missing.fields.soundUri,
+            "a copy that is merely late leaves the channel's own sound alone",
+        )
+        assertTrue(
+            FidelityGap.POLITE_SOUND_UNAVAILABLE in missing.gaps,
+            "the degradation has to be visible: ${missing.gaps}",
+        )
     }
 
     @Test
-    fun `POLITE silences the sound, records the gap, and scales the vibration`() {
+    fun `a POLITE write with no attenuated copy does not silence the channel`() {
+        // The defect that stranded a real channel — root-cause §3.5, and the write the 10-11 capture
+        // shows going out with `applied=Ok` while carrying `soundUri = null`. The attenuated copy is
+        // built on a worker and the cache is per-process, so this is the *first* POLITE write of every
+        // process; the channel was left silent, and the write-ahead record that could have undone it
+        // died with the app's own storage a reinstall later. Silence is MUTED's job — a state the
+        // engine installs on its own schedule, with a record behind it — so a copy that is not ready
+        // is a degradation, and the safe degradation is to leave the channel's own sound exactly where
+        // it is and report the gap.
+        //
+        // Re-derived, not weakened: this test used to assert `assertNull(fields.soundUri)` and
+        // `assertEquals(0, fields.audioUsage)`, which was the old contract ("POLITE becomes
+        // vibration-only"). The device says that contract is what muted `ig_direct`, so the expected
+        // values come from the platform now.
         val result = edit(CooldownState.POLITE)
         val fields = result.fields
-        assertNull(fields.soundUri)
+        assertEquals(
+            original.fields.soundUri,
+            fields.soundUri,
+            "a missing copy must leave the channel's own sound alone, never clear it",
+        )
+        // The attributes describe the sound, so they travel with it. The platform drops them together
+        // with a null sound, and a sound that came back without them is not the channel the user had.
+        assertEquals(original.fields.audioUsage, fields.audioUsage)
+        assertEquals(original.fields.audioContentType, fields.audioContentType)
+        assertEquals(original.fields.audioFlags, fields.audioFlags)
+        // POLITE is still POLITE where it can be — quieter is what it means — so the vibration is
+        // scaled, and the gap is what says the sound half of it could not happen.
         assertEquals(listOf(0L, 77L, 200L, 77L), fields.vibrationPattern)
         assertTrue(fields.vibrationEnabled)
-        // With no sound there are no audio attributes: the platform drops them together with the
-        // sound, and carrying the snapshot's values here would make the actuator's idempotence
-        // comparison fail on every post.
-        assertEquals(0, fields.audioUsage)
         assertEquals(setOf(FidelityGap.POLITE_SOUND_UNAVAILABLE), result.gaps)
     }
 

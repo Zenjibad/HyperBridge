@@ -158,12 +158,17 @@ class CooldownCoordinatorDifferentialTest {
     }
 
     @Test
-    fun `a channel that cannot vibrate plays POLITE silently, which the engine's model does not see`() {
-        // A recorded Plan 2 deviation, not a wish: with no sound copy (NoPoliteSound) and no
-        // vibration, the device plays nothing at POLITE, while spec §5.1's rule tells the engine the
-        // alert played because the state was not MUTED. The deviation only ever makes the cooldown
-        // longer than AOSP's, and Plan 3's AttenuatedSoundFactory removes the case entirely by giving
-        // POLITE a real 30 % sound. This test exists so the deviation stays a fact.
+    fun `a channel that cannot vibrate still plays its own sound at POLITE, and the device agrees`() {
+        // Re-derived, and the deviation this test used to record is gone rather than tolerated. It read
+        // "with no sound copy (NoPoliteSound) and no vibration the device plays nothing at POLITE, while
+        // spec §5.1's rule tells the engine the alert played" — and that was not a harmless fidelity
+        // gap: a POLITE write that clears the sound is what left `com.instagram.android/ig_direct`
+        // silent and stranded on the device, because a silent channel never enters cooldown again
+        // (root-cause §3.5, §3.6). POLITE now keeps the channel's own sound when there is no copy to
+        // install, so the device plays it and its read-back is POLITE, exactly as the engine's model has
+        // it. The only shape that still plays nothing at POLITE is a channel with no sound *and* no
+        // vibration, and that channel can never enter a cooldown at all: `alertWasAudible` reads it as
+        // silent.
         val packageName = "com.example.silent"
         val target = ChannelTarget.perApp(userId = 0, packageName = packageName, uid = 10_500)
         val device = FakeChannelDevice()
@@ -185,17 +190,16 @@ class CooldownCoordinatorDifferentialTest {
         clock.nowMs = 0
         coordinator.onPost(AlertEvent(target, device.snapshotFor(packageName), -1))
         clock.nowMs = 4_000
+        // What the second alert arrives in, read before it is judged: `stateFor` names a state by what
+        // it would play, and POLITE's mark on a channel that cannot vibrate is the sound it *kept* --
+        // so the read-back, the audibility and the model all agree.
         val at = device.stateFor(packageName)
+        val audible = device.wouldAlert(packageName)
         val outcome = coordinator.onPost(AlertEvent(target, device.snapshotFor(packageName), -1))
 
-        // `FakeChannelDevice.stateFor` names a state by what it would play, and this channel has
-        // nothing to play either way, so it cannot report POLITE here -- with no sound copy and no
-        // vibration, POLITE and MUTED are the same content. That *is* the deviation this test records:
-        // the coordinator's view is POLITE (asserted below) while the device reads back nothing to
-        // play, which is why `wouldAlert` is false.
-        assertEquals(CooldownState.MUTED, at, "the device's read-back sees nothing to play")
+        assertEquals(CooldownState.POLITE, at, "the channel still has its own sound, so it is POLITE")
+        assertTrue(audible, "and the alert does play, at the channel's own volume")
         assertEquals(CooldownState.POLITE, outcome.installedState)
-        assertFalse(device.wouldAlert(packageName), "but the device plays nothing")
     }
 
     private companion object {
