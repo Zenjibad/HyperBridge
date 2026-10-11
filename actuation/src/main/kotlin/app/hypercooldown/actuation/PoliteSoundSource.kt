@@ -11,8 +11,16 @@ package app.hypercooldown.actuation
  * commit `39162d9`). Replacing [NoPoliteSound] is therefore a drop-in change, not a redesign.
  */
 fun interface PoliteSoundSource {
-    /** A `content://` URI the platform can open at alert time, or null when no copy is available. */
-    fun politeSoundFor(snapshot: ChannelSnapshot): String?
+    /**
+     * A `content://` URI the platform can open at alert time, or null when no copy is available.
+     *
+     * [factor] is the attenuation **for this alert**, passed per call rather than held by the source:
+     * it is `EngineConfig.politeVolume` for the app being written, and the user can change it between
+     * two alerts. A source that captured it once would keep serving the copy the process started with,
+     * which is the reported "a change needs a reboot"; `EditFactory` has the live config in hand, so
+     * this is where the number belongs.
+     */
+    fun politeSoundFor(snapshot: ChannelSnapshot, factor: Float): String?
 }
 
 /**
@@ -21,5 +29,5 @@ fun interface PoliteSoundSource {
  * read.
  */
 object NoPoliteSound : PoliteSoundSource {
-    override fun politeSoundFor(snapshot: ChannelSnapshot): String? = null
+    override fun politeSoundFor(snapshot: ChannelSnapshot, factor: Float): String? = null
 }

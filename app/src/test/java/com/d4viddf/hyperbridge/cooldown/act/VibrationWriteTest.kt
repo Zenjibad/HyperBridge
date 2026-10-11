@@ -156,7 +156,7 @@ class VibrationWriteTest {
             rom,
             CooldownState.POLITE,
             EngineConfig(),
-            PoliteSoundSource { null },
+            PoliteSoundSource { _, _ -> null },
         )
 
         assertEquals(listOf(0L, 77L, 200L, 77L), edit.fields.vibrationPattern)

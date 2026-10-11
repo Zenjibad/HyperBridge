@@ -50,6 +50,13 @@ import java.util.concurrent.Executor
  * behind an unchanged URI change, the cached copy is stale: no cheaper identity for a sound exists
  * here, and re-reading per alert is exactly what §6's bound exists to avoid.
  *
+ * **The factor is a parameter, never a field.** It is the alert's own `EngineConfig.politeVolume`,
+ * which the user can change between two alerts, and a value captured when this class was constructed
+ * would keep publishing the attenuation the process started with — the reported "a change needs a
+ * reboot". The cache key and the in-flight key both carry it, so a changed setting builds a second copy
+ * rather than serving the first one, and a build in flight at one factor cannot be handed to a waiter
+ * that asked for another.
+ *
  * [note] receives a plain-English reason for every refusal. It is a callback rather than a log call so
  * this class stays free of `android.*` and every reason stays assertable in a JVM test; the wiring points
  * it at `Log.w`, where the reason is visible rather than mysterious (spec §6, "fail loud, not silent").
@@ -61,17 +68,24 @@ class AttenuatedSoundFactory(
     private val decoder: AudioDecoder,
     private val publisher: SoundCopyPublisher,
     private val cache: SoundCopyCache,
-    private val factor: Float,
     private val worker: Executor,
     private val budget: SoundBudget = SoundBudget(),
     private val note: (String) -> Unit = {},
 ) : PoliteSoundSource {
 
-    /** The sources whose read/decode/publish is queued or running, so one sound is never built twice. */
+    /**
+     * The reads/decodes/publishes queued or running, keyed by `(source, factor)` so one sound is never
+     * built twice for the same attenuation.
+     *
+     * The factor is part of the key rather than a field of this class: it is this alert's
+     * `EngineConfig.politeVolume`, which the user can change between two alerts. A build in flight at
+     * 30 % must not answer for a request at 50 %, and it must not hand the 30 % copy to a waiter that
+     * asked for 50 % — that is the stale-value defect this key exists to prevent.
+     */
     private val inFlight: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     /**
-     * Who to tell when the copy of a source is ready, per source.
+     * Who to tell when the copy of a source is ready, per `(source, factor)`.
      *
      * A list rather than a slot because two channels can alias one settings URI (see the class note):
      * one build serves both, and both have to hear about it or the second one's POLITE stays silent
@@ -81,10 +95,10 @@ class AttenuatedSoundFactory(
     private val waitersLock = Any()
     private val waiters: MutableMap<String, MutableList<() -> Unit>> = HashMap()
 
-    override fun politeSoundFor(snapshot: ChannelSnapshot): String? {
+    override fun politeSoundFor(snapshot: ChannelSnapshot, factor: Float): String? {
         val source = sourceOf(snapshot) ?: return null
         cache.get(source, factor)?.let { return it }
-        submit(source)
+        submit(source, factor)
         // The gap this answer makes `EditFactory` record must not be unexplained -- an unexplained
         // `POLITE_SOUND_UNAVAILABLE` is what made the cold-start defect hard to diagnose. This is the
         // one refusal that is not a failure: on a cold cache the copy does not exist *yet*, and the
@@ -110,15 +124,23 @@ class AttenuatedSoundFactory(
      * this app damped it — never the channel as it arrived, which carries our own published copy once
      * POLITE is installed. A copy handed in as a source is refused by [sourceOf] rather than scaled
      * twice, but the caller's snapshot is still where the right answer comes from.
+     *
+     * [factor] must be the same `EngineConfig.politeVolume` the write for this alert will use, read at
+     * the same moment: the two are separate calls and a mismatch would build a copy nothing looks up.
      */
-    fun prewarm(snapshot: ChannelSnapshot, onReady: (() -> Unit)? = null) {
+    fun prewarm(snapshot: ChannelSnapshot, factor: Float, onReady: (() -> Unit)? = null) {
         val source = sourceOf(snapshot) ?: return
         if (cache.get(source, factor) != null) return
         if (onReady != null) {
-            synchronized(waitersLock) { waiters.getOrPut(source) { mutableListOf() } += onReady }
+            synchronized(waitersLock) {
+                waiters.getOrPut(keyOf(source, factor)) { mutableListOf() } += onReady
+            }
         }
-        submit(source)
+        submit(source, factor)
     }
+
+    /** The `(source, factor)` identity of one build: one copy per sound per attenuation. */
+    private fun keyOf(source: String, factor: Float): String = "$factor|$source"
 
     /**
      * The URI whose bytes are the sound to attenuate, or null with a reason.
@@ -142,18 +164,20 @@ class AttenuatedSoundFactory(
         return candidate
     }
 
-    private fun submit(source: String) {
-        if (!inFlight.add(source)) return
+    private fun submit(source: String, factor: Float) {
+        val key = keyOf(source, factor)
+        if (!inFlight.add(key)) return
         try {
-            worker.execute { produce(source) }
+            worker.execute { produce(source, factor) }
         } catch (t: Exception) {
             // A rejected task must not wedge the key out of every later attempt.
-            inFlight.remove(source)
+            inFlight.remove(key)
             note("cannot schedule the copy of $source: ${t.javaClass.simpleName}: ${t.message}")
         }
     }
 
-    private fun produce(source: String) {
+    private fun produce(source: String, factor: Float) {
+        val key = keyOf(source, factor)
         try {
             val bytes = reader.read(source)
             when {
@@ -163,15 +187,15 @@ class AttenuatedSoundFactory(
                         "${budget.maxSourceBytes}-byte budget",
                 )
                 else -> {
-                    val wav = attenuatedWav(bytes, source) ?: return
-                    val published = publisher.publish(displayNameFor(source), wav)
+                    val wav = attenuatedWav(bytes, source, factor) ?: return
+                    val published = publisher.publish(displayNameFor(source, factor), wav)
                     if (published == null) {
                         note("cannot publish the copy of $source")
                     } else {
                         cache.put(source, factor, published)
                         // Announced only once the cache holds the copy, so a listener that reacts by
                         // asking for it gets the URI rather than starting the build again.
-                        announce(source)
+                        announce(source, factor)
                     }
                 }
             }
@@ -180,23 +204,23 @@ class AttenuatedSoundFactory(
             // here would kill the process rather than the episode.
             note("cannot build the copy of $source: ${t.javaClass.simpleName}: ${t.message}")
         } finally {
-            inFlight.remove(source)
+            inFlight.remove(key)
             // A build that failed leaves nobody to tell, so its listeners are dropped rather than kept
             // for a later attempt: they are re-registered by the next prewarm for the same sound, and
             // keeping them would grow one entry per alert for a sound that never becomes readable.
-            synchronized(waitersLock) { waiters.remove(source) }
+            synchronized(waitersLock) { waiters.remove(key) }
         }
     }
 
     /**
-     * Hands every listener waiting on [source] its one call, and forgets them.
+     * Hands every listener waiting on this `(source, factor)` its one call, and forgets them.
      *
      * A listener that throws is named and swallowed: by the time this runs the copy is published and
      * cached, so the news is good and a bug in one listener must not cost the sound worker its thread
      * or the other listeners their call.
      */
-    private fun announce(source: String) {
-        val pending = synchronized(waitersLock) { waiters.remove(source) } ?: return
+    private fun announce(source: String, factor: Float) {
+        val pending = synchronized(waitersLock) { waiters.remove(keyOf(source, factor)) } ?: return
         for (waiter in pending) {
             try {
                 waiter()
@@ -207,7 +231,7 @@ class AttenuatedSoundFactory(
     }
 
     /** The attenuated copy of [bytes], or null with a reason. The only place [WavAttenuator] is called. */
-    private fun attenuatedWav(bytes: ByteArray, source: String): ByteArray? {
+    private fun attenuatedWav(bytes: ByteArray, source: String, factor: Float): ByteArray? {
         WavAttenuator.attenuate(bytes, factor)?.let { return it }
 
         val decoded = decoder.decode(bytes)
@@ -240,6 +264,6 @@ class AttenuatedSoundFactory(
      * the sound it attenuates, and the factor is in the name so two attenuation settings never look
      * alike in `/sdcard/Notifications`.
      */
-    private fun displayNameFor(sourceUri: String): String =
+    private fun displayNameFor(sourceUri: String, factor: Float): String =
         "hypercooldown-polite-${Integer.toHexString(sourceUri.hashCode())}-${Math.round(factor * 100)}.wav"
 }

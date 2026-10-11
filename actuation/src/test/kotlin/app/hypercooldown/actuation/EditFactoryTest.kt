@@ -27,6 +27,35 @@ class EditFactoryTest {
     }
 
     @Test
+    fun `a POLITE volume of zero is the silence that was asked for, not a missing copy`() {
+        // "Make the second alert silent" is `SoundOption.SILENT`, which `CooldownOptions.effectiveConfig`
+        // realises as `politeVolume = 0`, and the screen's own volume field says 0 % is the same as
+        // switching that row off. This is the one way that setting reaches the write path, so it must be
+        // silence -- of *both* effects, because a silent alert that buzzed would not be silent, and
+        // because `VibrationScaler.scale` refuses a factor of 0 by contract: without the guard in
+        // `EditFactory.politeVibration` this exact call threw `IllegalArgumentException` out of the
+        // listener callback on every POLITE edit, which is what "the switch does nothing" looks like
+        // from the outside.
+        val asked = mutableListOf<Float>()
+        val recording = PoliteSoundSource { _, factor ->
+            asked += factor
+            "content://copy"
+        }
+
+        val result = EditFactory.editFor(original, CooldownState.POLITE, config.copy(politeVolume = 0f), recording)
+
+        assertNull(result.fields.soundUri)
+        assertNull(result.fields.vibrationPattern)
+        assertNull(result.fields.vibrationEffectBytes)
+        assertFalse(
+            result.fields.vibrationEnabled,
+            "a null pattern with the flag still set falls back to the platform's default vibration",
+        )
+        assertTrue(result.gaps.isEmpty(), "silence on purpose is not a fidelity gap: ${result.gaps}")
+        assertTrue(asked.isEmpty(), "nothing may be decoded to be thrown away")
+    }
+
+    @Test
     fun `POLITE silences the sound, records the gap, and scales the vibration`() {
         val result = edit(CooldownState.POLITE)
         val fields = result.fields
@@ -55,7 +84,7 @@ class EditFactoryTest {
 
     @Test
     fun `a suppressed heads-up is a demotion and nothing else`() {
-        val source = PoliteSoundSource { "content://copy/of/the/sound" }
+        val source = PoliteSoundSource { _, _ -> "content://copy/of/the/sound" }
         val plain = EditFactory.editFor(original, CooldownState.POLITE, config, source)
         val quiet = EditFactory.editFor(
             original,
@@ -94,7 +123,7 @@ class EditFactoryTest {
         // The island row and the heads-up row are separate on purpose, and so are POLITE and MUTED:
         // a demotion of one state must not leak into the other. This is the pin for POLITE's half of
         // that, and the sound is asserted beside it because POLITE with no sound would be MUTED.
-        val source = PoliteSoundSource { "content://copy" }
+        val source = PoliteSoundSource { _, _ -> "content://copy" }
         val politeSuppressed = HeadsUpRealisation(polite = HeadsUpOption.SUPPRESS)
 
         assertEquals(3, edit(CooldownState.POLITE, source, politeSuppressed).fields.importance)
@@ -185,7 +214,7 @@ class EditFactoryTest {
 
     @Test
     fun `POLITE uses a polite sound when one is available`() {
-        val source = PoliteSoundSource { "content://media/external/audio/media/8161" }
+        val source = PoliteSoundSource { _, _ -> "content://media/external/audio/media/8161" }
         val result = EditFactory.editFor(original, CooldownState.POLITE, config, source)
         assertEquals("content://media/external/audio/media/8161", result.fields.soundUri)
         // With a sound to play, the app's own stream usage travels with it -- which is what Plan 3's
@@ -193,5 +222,23 @@ class EditFactoryTest {
         assertEquals(original.fields.audioUsage, result.fields.audioUsage)
         assertEquals(original.fields.audioContentType, result.fields.audioContentType)
         assertTrue(result.gaps.isEmpty())
+    }
+
+    @Test
+    fun `POLITE asks the sound source at this post's attenuation, not one it captured earlier`() {
+        // The reported "a change needs a reboot": the copy's factor was a field of the sound factory,
+        // read from a store nothing writes, so "how much quieter" reached nothing. It is this call's
+        // `EngineConfig.politeVolume` now -- the same config that decides POLITE's vibration two lines
+        // above -- which is what makes the next alert use the value the user just typed.
+        val asked = mutableListOf<Float>()
+        val recording = PoliteSoundSource { _, factor ->
+            asked += factor
+            null
+        }
+
+        EditFactory.editFor(original, CooldownState.POLITE, config.copy(politeVolume = 0.5f), recording)
+        EditFactory.editFor(original, CooldownState.POLITE, config.copy(politeVolume = 0.2f), recording)
+
+        assertEquals(listOf(0.5f, 0.2f), asked)
     }
 }

@@ -47,7 +47,7 @@ class CooldownCoordinatorPoliteSoundTest {
         /** The channel sound every POLITE edit asked to attenuate, in order. */
         val asked = mutableListOf<String?>()
 
-        override fun politeSoundFor(snapshot: ChannelSnapshot): String? {
+        override fun politeSoundFor(snapshot: ChannelSnapshot, factor: Float): String? {
             asked += snapshot.fields.soundUri
             return if (ready) copyUri else null
         }

@@ -25,8 +25,20 @@ object EditFactory {
         val soundUri = when (state) {
             CooldownState.DEFAULT -> source.soundUri
             CooldownState.MUTED -> null
-            CooldownState.POLITE -> {
-                val copy = politeSound.politeSoundFor(snapshot)
+            CooldownState.POLITE -> if (config.politeVolume <= 0f) {
+                // A POLITE volume of zero is the user's own "make the second alert silent": it is what
+                // `SoundOption.SILENT` resolves to, and the screen's own volume field says 0 % is the
+                // same as switching the sound off. That is silence on purpose, not a copy that could
+                // not be built, so it is *not* a fidelity gap -- and nothing is decoded to be thrown
+                // away, which is what consulting the source would do on every alert.
+                null
+            } else {
+                // The factor is read off *this* call's config, not off the source: the same
+                // `EngineConfig` decides POLITE's vibration a few lines down, and the two must agree.
+                // It is also what makes a changed attenuation take effect on the next alert -- the
+                // config is re-derived from the live option set by the caller (`CooldownRuntime`'s
+                // `configFor`), so nothing here can serve the value the process started with.
+                val copy = politeSound.politeSoundFor(snapshot, config.politeVolume)
                 if (copy == null && source.soundUri != null) {
                     gaps += FidelityGap.POLITE_SOUND_UNAVAILABLE
                 }
@@ -34,19 +46,29 @@ object EditFactory {
             }
         }
 
+        // A POLITE volume of zero is the user asking for a silent second alert (`SoundOption.SILENT`
+        // resolves to it, and the screen's volume field says 0 % is the same as switching the sound off
+        // above): the sound is dropped a few lines up, and the vibration goes with it, because a silent
+        // alert that buzzed would not be silent -- the same rule MUTED already follows. It is also
+        // load-bearing rather than tidy: `VibrationScaler.scale` refuses a factor of 0 by contract, so
+        // an unguarded call threw `IllegalArgumentException` out of the listener callback on every
+        // POLITE edit rather than silencing anything.
+        val politeSilent = state == CooldownState.POLITE && config.politeVolume <= 0f
+
         // Clearing the flag, not just the two payload fields, is what makes MUTED silent:
         // `NotificationRecord.getVibrationForChannel` returns null only when `!shouldVibrate()`, and
         // otherwise falls through effect -> pattern -> `VibratorHelper.createDefaultVibration()`.
         val vibrationEnabled = when (state) {
             CooldownState.DEFAULT -> source.vibrationEnabled
             CooldownState.MUTED -> false
-            CooldownState.POLITE -> source.vibrationEnabled
+            CooldownState.POLITE -> !politeSilent && source.vibrationEnabled
         }
 
         // POLITE's two payloads are decided together: the platform's effect for a pattern-configured
         // channel is *derived from the pattern we hold* (see `politeVibration`), so carrying it as well
         // as a scaled pattern would either be ignored or -- worse -- played at full strength.
-        val polite = if (state == CooldownState.POLITE) politeVibration(source, config, gaps) else null
+        val polite =
+            if (state == CooldownState.POLITE && !politeSilent) politeVibration(source, config, gaps) else null
 
         val vibrationPattern = when (state) {
             CooldownState.DEFAULT -> source.vibrationPattern

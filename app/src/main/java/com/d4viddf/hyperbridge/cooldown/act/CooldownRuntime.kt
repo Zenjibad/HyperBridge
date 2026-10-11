@@ -212,6 +212,12 @@ class CooldownRuntime private constructor(private val context: Context) {
      */
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    /**
+     * The POLITE copy factory. It holds no attenuation of its own: the factor is handed to it per call
+     * from the alert's own `configFor(packageName)`, so "how much quieter" is a live setting and not a
+     * value this process was constructed with. The cache inside it is keyed by `(source, factor)` and
+     * belongs to the process, which is why the factory is one instance shared by every coordinator.
+     */
     private val politeSound = AttenuatedSoundFactory(
         // The settings alias is resolved, not refused: `content://settings/system/notification_sound`
         // is what the shell channel actually carries, and it cannot be opened as given. The reader tries
@@ -222,7 +228,6 @@ class CooldownRuntime private constructor(private val context: Context) {
         decoder = MediaCodecAudioDecoder(soundBudget),
         publisher = MediaStoreSoundPublisher(context),
         cache = soundCopyCache,
-        factor = config.politeVolume,
         worker = soundWorker,
         budget = soundBudget,
         // Every refusal is named in the same `adb logcat -s Cooldown:V` stream as the post it belongs to.
@@ -296,6 +301,17 @@ class CooldownRuntime private constructor(private val context: Context) {
 
     @Synchronized
     fun onAlert(event: AlertEvent) {
+        // The transport is the one capability this class resolves at connect time rather than per
+        // post, and a phone that has just come up has no Shizuku yet: every post is refused, so
+        // *nothing* the user changes in the settings screen can be seen and the feature looks like it
+        // needs a reboot to take a setting -- measured on this device, where the log below repeated
+        // for every post with `SHIZUKU_BOUND=false`. So it is re-probed here, and only while it is
+        // absent. That is safe by construction rather than by care: a null transport means
+        // `refreshTransport` has just cleared the coordinator map, and with no transport this app
+        // cannot have written anything -- there is no live plan, no armed wake-up and no record it
+        // owns to strand (spec §6, invariant 1). A live transport is never re-probed here, so no
+        // coordinator is ever dropped underneath a channel it is damping.
+        if (transport == null) refreshTransport()
         val selected = transport
         if (selected == null) {
             // Spec §5.6: with no channel writes available, never pretend to work.
@@ -340,7 +356,12 @@ class CooldownRuntime private constructor(private val context: Context) {
         // -- measured on the device as peak 6497 -> 1949. The alert's own snapshot is the right answer
         // only while no record exists, which is the one case it is pristine by definition.
         val pristine = active.pristineSnapshotFor(event.target.key) ?: event.snapshot
-        politeSound.prewarm(pristine) {
+        // The attenuation for *this* alert, read at the same moment the coordinator's own config was
+        // derived: `coordinatorFor` above just built `active` from `configFor(packageName)`, and asking
+        // again here is the same live read of the option set, so a change made in the settings screen is
+        // what the very next alert uses. The two calls must not disagree -- `EditFactory` looks the copy
+        // up with the same number -- which is why neither is cached anywhere.
+        politeSound.prewarm(pristine, configFor(event.target.packageName).politeVolume) {
             mainHandler.post {
                 // `active`, captured, rather than a re-read of the field: the copy belongs to the
                 // episode this callback was posted from, and a transport refresh between the post and

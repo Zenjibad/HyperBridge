@@ -82,7 +82,7 @@ class RestoreGuardTest {
     @Test
     fun `a polite write derives sound and vibration too, and never a bit outside its field set`() {
         val snapshot = ChannelSnapshot(fields = fields(), channelBytes = "AA==")
-        val copy = PoliteSoundSource { "content://media/external/audio/media/8161" }
+        val copy = PoliteSoundSource { _, _ -> "content://media/external/audio/media/8161" }
         val polite = EditFactory.editFor(snapshot, CooldownState.POLITE, EngineConfig(), copy)
         val derived = LockResidue.forWrite(snapshot.fields, polite.fields)
 

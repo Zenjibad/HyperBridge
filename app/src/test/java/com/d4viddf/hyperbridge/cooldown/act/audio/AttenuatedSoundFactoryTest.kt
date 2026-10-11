@@ -33,8 +33,8 @@ class AttenuatedSoundFactoryTest {
         val publisher = RecordingPublisher(publishedUri)
         val factory = factory(SoundReader { null }, publisher)
 
-        assertNull(factory.politeSoundFor(snapshot(soundUri = null)))
-        factory.prewarm(snapshot(soundUri = null))
+        assertNull(factory.politeSoundFor(snapshot(soundUri = null), factor))
+        factory.prewarm(snapshot(soundUri = null), factor)
 
         assertEquals(0, publisher.published.size)
     }
@@ -50,13 +50,13 @@ class AttenuatedSoundFactoryTest {
             worker = Executor { queued += it },
         )
 
-        assertNull(factory.politeSoundFor(snapshot(sourceUri)))
+        assertNull(factory.politeSoundFor(snapshot(sourceUri), factor))
         assertEquals("nothing may be read on the caller's thread", 0, reads)
         assertEquals("the work must have been handed to the worker", 1, queued.size)
 
         queued.removeFirst().run()
 
-        assertEquals(publishedUri, factory.politeSoundFor(snapshot(sourceUri)))
+        assertEquals(publishedUri, factory.politeSoundFor(snapshot(sourceUri), factor))
         assertEquals(1, reads)
     }
 
@@ -66,10 +66,10 @@ class AttenuatedSoundFactoryTest {
         var reads = 0
         val factory = factory(SoundReader { reads++; source }, publisher)
 
-        factory.prewarm(snapshot(sourceUri))
+        factory.prewarm(snapshot(sourceUri), factor)
 
-        assertEquals(publishedUri, factory.politeSoundFor(snapshot(sourceUri)))
-        assertEquals(publishedUri, factory.politeSoundFor(snapshot(sourceUri)))
+        assertEquals(publishedUri, factory.politeSoundFor(snapshot(sourceUri), factor))
+        assertEquals(publishedUri, factory.politeSoundFor(snapshot(sourceUri), factor))
         assertEquals(1, reads)
         assertEquals(1, publisher.published.size)
     }
@@ -83,9 +83,9 @@ class AttenuatedSoundFactoryTest {
             worker = Executor { queued += it },
         )
 
-        factory.prewarm(snapshot(sourceUri))
-        factory.prewarm(snapshot(sourceUri))
-        factory.politeSoundFor(snapshot(sourceUri))
+        factory.prewarm(snapshot(sourceUri), factor)
+        factory.prewarm(snapshot(sourceUri), factor)
+        factory.politeSoundFor(snapshot(sourceUri), factor)
 
         assertEquals(1, queued.size)
     }
@@ -99,11 +99,56 @@ class AttenuatedSoundFactoryTest {
             worker = Executor { queued += it },
         )
 
-        factory.prewarm(snapshot(sourceUri))
+        factory.prewarm(snapshot(sourceUri), factor)
         queued.removeFirst().run()
-        factory.prewarm(snapshot(sourceUri))
+        factory.prewarm(snapshot(sourceUri), factor)
 
         assertEquals(0, queued.size)
+    }
+
+    @Test
+    fun `a changed factor publishes a copy at the new factor, not the one the process started with`() {
+        val publisher = RecordingPublisher(publishedUri)
+        val factory = factory(SoundReader { source }, publisher)
+
+        factory.prewarm(snapshot(sourceUri), 0.30f)
+        factory.politeSoundFor(snapshot(sourceUri), 0.30f)
+
+        // The user moves "how much quieter" to 50 %: the next alert must not be served the 30 % copy.
+        factory.prewarm(snapshot(sourceUri), 0.50f)
+        factory.politeSoundFor(snapshot(sourceUri), 0.50f)
+
+        assertEquals("one copy per attenuation", 2, publisher.published.size)
+        assertTrue(publisher.published[0].contentEquals(WavAttenuator.attenuate(source, 0.30f)))
+        assertTrue(publisher.published[1].contentEquals(WavAttenuator.attenuate(source, 0.50f)))
+
+        // Both stay cached, keyed by their own factor: the change does not evict the value it replaced,
+        // so an app whose factor is still 30 % is not silently served the 50 % copy.
+        factory.politeSoundFor(snapshot(sourceUri), 0.30f)
+        assertEquals(2, publisher.published.size)
+    }
+
+    @Test
+    fun `a build in flight at one factor never answers the waiter that asked for another`() {
+        val queued = ArrayDeque<Runnable>()
+        val factory = factory(
+            SoundReader { source },
+            RecordingPublisher(publishedUri),
+            worker = Executor { queued += it },
+        )
+
+        var announced = 0
+        factory.prewarm(snapshot(sourceUri), 0.30f) { announced++ }
+        factory.prewarm(snapshot(sourceUri), 0.50f) { announced++ }
+
+        assertEquals("two attenuations are two builds, not one", 2, queued.size)
+
+        // The 30 % build lands first, and only the listener that asked for 30 % may hear about it: a
+        // waiter told about the other factor's copy would install the wrong attenuation.
+        queued.removeFirst().run()
+        assertEquals(1, announced)
+        queued.removeFirst().run()
+        assertEquals(2, announced)
     }
 
     @Test
@@ -111,9 +156,9 @@ class AttenuatedSoundFactoryTest {
         val publisher = RecordingPublisher(publishedUri)
         val factory = factory(SoundReader { source }, publisher)
 
-        factory.prewarm(snapshot(sourceUri))
+        factory.prewarm(snapshot(sourceUri), factor)
 
-        assertEquals(publishedUri, factory.politeSoundFor(snapshot(sourceUri)))
+        assertEquals(publishedUri, factory.politeSoundFor(snapshot(sourceUri), factor))
         val copy = publisher.published.single()
         assertEquals(source.size, copy.size)
         // 20000 * 0.30 = 6000, and the second sample is its negative.
@@ -132,7 +177,7 @@ class AttenuatedSoundFactoryTest {
             decoder = AudioDecoder { decodes++; compressedPcm },
         )
 
-        factory.prewarm(snapshot(sourceUri))
+        factory.prewarm(snapshot(sourceUri), factor)
 
         assertEquals("16-bit PCM is the attenuator's own path and must not be decoded", 0, decodes)
         assertTrue(publisher.published.single().contentEquals(WavAttenuator.attenuate(source, factor)))
@@ -150,9 +195,9 @@ class AttenuatedSoundFactoryTest {
             },
         )
 
-        factory.prewarm(snapshot(sourceUri))
+        factory.prewarm(snapshot(sourceUri), factor)
 
-        assertEquals(publishedUri, factory.politeSoundFor(snapshot(sourceUri)))
+        assertEquals(publishedUri, factory.politeSoundFor(snapshot(sourceUri), factor))
         val copy = publisher.published.single()
         // `WavAttenuator`'s own header plus the three decoded samples, at exactly 0.300.
         assertEquals(PcmWav.HEADER_BYTES + 6, copy.size)
@@ -170,9 +215,9 @@ class AttenuatedSoundFactoryTest {
         val notes = mutableListOf<String>()
         val factory = factory(SoundReader { null }, publisher, notes = notes)
 
-        factory.prewarm(snapshot(sourceUri))
+        factory.prewarm(snapshot(sourceUri), factor)
 
-        assertNull(factory.politeSoundFor(snapshot(sourceUri)))
+        assertNull(factory.politeSoundFor(snapshot(sourceUri), factor))
         assertEquals(0, publisher.published.size)
         assertTrue("no reason was recorded", notes.isNotEmpty())
         assertTrue("the reason must name the sound: ${notes.first()}", notes.first().contains(sourceUri))
@@ -183,9 +228,9 @@ class AttenuatedSoundFactoryTest {
         val publisher = RecordingPublisher(publishedUri)
         val factory = factory(SoundReader { ByteArray(4096) { 0x7F } }, publisher)
 
-        factory.prewarm(snapshot(sourceUri))
+        factory.prewarm(snapshot(sourceUri), factor)
 
-        assertNull(factory.politeSoundFor(snapshot(sourceUri)))
+        assertNull(factory.politeSoundFor(snapshot(sourceUri), factor))
         assertEquals(0, publisher.published.size)
     }
 
@@ -199,9 +244,9 @@ class AttenuatedSoundFactoryTest {
             notes = notes,
         )
 
-        factory.prewarm(snapshot(sourceUri))
+        factory.prewarm(snapshot(sourceUri), factor)
 
-        assertNull(factory.politeSoundFor(snapshot(sourceUri)))
+        assertNull(factory.politeSoundFor(snapshot(sourceUri), factor))
         assertTrue("no reason was recorded", notes.isNotEmpty())
         assertTrue(notes.first(), notes.first().contains("codec died"))
     }
@@ -218,9 +263,9 @@ class AttenuatedSoundFactoryTest {
             notes = notes,
         )
 
-        factory.prewarm(snapshot(sourceUri))
+        factory.prewarm(snapshot(sourceUri), factor)
 
-        assertNull(factory.politeSoundFor(snapshot(sourceUri)))
+        assertNull(factory.politeSoundFor(snapshot(sourceUri), factor))
         assertEquals(0, publisher.published.size)
         assertTrue("no reason was recorded", notes.isNotEmpty())
         assertTrue(notes.first(), notes.first().contains("budget"))
@@ -239,9 +284,9 @@ class AttenuatedSoundFactoryTest {
             notes = notes,
         )
 
-        factory.prewarm(snapshot(sourceUri))
+        factory.prewarm(snapshot(sourceUri), factor)
 
-        assertNull(factory.politeSoundFor(snapshot(sourceUri)))
+        assertNull(factory.politeSoundFor(snapshot(sourceUri), factor))
         assertEquals(0, decodes)
         assertEquals(0, publisher.published.size)
         assertTrue("no reason was recorded", notes.isNotEmpty())
@@ -254,7 +299,7 @@ class AttenuatedSoundFactoryTest {
         val publisher = RecordingPublisher(uri = null)
         val factory = factory(SoundReader { source }, publisher, cache = cache)
 
-        factory.prewarm(snapshot(sourceUri))
+        factory.prewarm(snapshot(sourceUri), factor)
 
         // A copy that could not be published is not cached, so nothing points at a row that is not there.
         assertNull(cache.get(sourceUri, factor))
@@ -262,7 +307,7 @@ class AttenuatedSoundFactoryTest {
 
         // And it is retried rather than remembered as impossible: a MediaStore insert can be refused
         // once and succeed later, and the cache stays empty until one does.
-        assertNull(factory.politeSoundFor(snapshot(sourceUri)))
+        assertNull(factory.politeSoundFor(snapshot(sourceUri), factor))
         assertEquals(2, publisher.published.size)
         assertNull(cache.get(sourceUri, factor))
     }
@@ -280,14 +325,14 @@ class AttenuatedSoundFactoryTest {
                 worker = worker,
             )
 
-            factory.prewarm(snapshot(sourceUri))
+            factory.prewarm(snapshot(sourceUri), factor)
             // A single worker runs its queue in order, so this no-op settling means the task is done.
             worker.submit { }.get()
 
             assertEquals("sound-worker", readOn)
             assertEquals("sound-worker", decodedOn)
             assertNotEquals(Thread.currentThread().name, readOn)
-            assertEquals(publishedUri, factory.politeSoundFor(snapshot(sourceUri)))
+            assertEquals(publishedUri, factory.politeSoundFor(snapshot(sourceUri), factor))
         } finally {
             worker.shutdown()
         }
@@ -301,7 +346,7 @@ class AttenuatedSoundFactoryTest {
         val announced = mutableListOf<String>()
         val factory = factory(SoundReader { source }, publisher)
 
-        factory.prewarm(snapshot(sourceUri)) { announced += "ready" }
+        factory.prewarm(snapshot(sourceUri), factor) { announced += "ready" }
 
         // The device's 60-80 ms gap between the POLITE write and the copy being published is what this
         // callback exists to close: the write has to be re-made once the copy is there, or the alert
@@ -318,8 +363,8 @@ class AttenuatedSoundFactoryTest {
 
         // Two channels aliasing one settings URI are one sound and one build, so the second waiter must
         // not be dropped: its own POLITE write is the one that needed the copy.
-        factory.prewarm(snapshot(sourceUri)) { announced += "first" }
-        factory.prewarm(snapshot(sourceUri)) { announced += "second" }
+        factory.prewarm(snapshot(sourceUri), factor) { announced += "first" }
+        factory.prewarm(snapshot(sourceUri), factor) { announced += "second" }
         assertEquals("one sound is one build", 1, queued.size)
 
         queued.removeFirst().run()
@@ -332,7 +377,7 @@ class AttenuatedSoundFactoryTest {
         val announced = mutableListOf<String>()
         val factory = factory(SoundReader { null }, RecordingPublisher(publishedUri))
 
-        factory.prewarm(snapshot(sourceUri)) { announced += "ready" }
+        factory.prewarm(snapshot(sourceUri), factor) { announced += "ready" }
 
         // Nothing was published, so there is nothing to install: a caller that re-applied POLITE here
         // would write the same sound-less state again and log an upgrade that did not happen.
@@ -350,7 +395,7 @@ class AttenuatedSoundFactoryTest {
             worker = Executor { queued += it },
         )
 
-        assertNull(factory.politeSoundFor(snapshot(sourceUri)))
+        assertNull(factory.politeSoundFor(snapshot(sourceUri), factor))
 
         // An unexplained `POLITE_SOUND_UNAVAILABLE` is what made the cold-start defect hard to
         // diagnose: the gap this answer records has to say that the copy is late, not missing.
@@ -370,12 +415,12 @@ class AttenuatedSoundFactoryTest {
             notes = notes,
         )
 
-        factory.prewarm(snapshot(sourceUri))
+        factory.prewarm(snapshot(sourceUri), factor)
         // The channel now carries our copy, so a caller that reached for the live channel's sound would
         // hand the copy straight back in.
         liveBytes = publisher.published.single()
 
-        factory.prewarm(snapshot(publishedUri))
+        factory.prewarm(snapshot(publishedUri), factor)
 
         assertEquals("a copy of a copy is 0.09, so it must not be built at all", 1, publisher.published.size)
         assertEquals("the copy was never read as a source", 1, reads)
@@ -397,9 +442,9 @@ class AttenuatedSoundFactoryTest {
         // The device's first two alerts of an episode: alert 1's POLITE write happens before the copy
         // exists, and by alert 2 the channel carries the copy this factory published. Measured before
         // this fix: peak 6497 -> 1949, exactly 0.30 x 0.30.
-        factory.prewarm(snapshot(sourceUri))
+        factory.prewarm(snapshot(sourceUri), factor)
         liveBytes = publisher.published.single()
-        factory.prewarm(snapshot(publishedUri))
+        factory.prewarm(snapshot(publishedUri), factor)
 
         assertEquals(
             "0.30 of the user's sound, twice -- never 0.30 and then 0.09",
@@ -432,7 +477,6 @@ class AttenuatedSoundFactoryTest {
         decoder = decoder,
         publisher = publisher,
         cache = cache,
-        factor = factor,
         worker = worker,
         budget = budget,
         note = { notes += it },
