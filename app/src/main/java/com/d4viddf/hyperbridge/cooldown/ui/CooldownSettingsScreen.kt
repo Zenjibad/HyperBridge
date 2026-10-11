@@ -79,6 +79,10 @@ import kotlinx.coroutines.launch
  *  3. the values are editable and validated, with AOSP's own value shown as a described preset: a
  *     value the user typed is never silently clamped, and an entry that is out of range says so.
  *
+ * Every switch reads its checked state from [CooldownSwitches], never from the option field: the
+ * fields are nullable, and comparing one against the value the switch would write answers *off* for
+ * "nobody has chosen" — which is how two rows whose own copy says "On by default" were drawn off.
+ *
  * The honest costs are on the rows they belong to and not in a footnote: the island's option is free
  * of channel writes and says so, and the heads-up option's demotion is stated where the switch is,
  * with no acknowledgement gate in front of it.
@@ -162,7 +166,7 @@ fun CooldownOptionsEditor(
             // `notification_cooldown_enabled` defaults to 1, so "nobody has ever touched this" reads
             // as on. The runtime's enable gate is `enabled != false` for the same reason, and the two
             // must not disagree or the screen would display "off" while the feature ran.
-            checked = options.enabled != false,
+            checked = CooldownSwitches.enabled(options),
             shape = getExpressiveShape(1, 0, ShapeStyle.Large),
             onCheckedChange = { onUpdate(options.copy(enabled = it)) }
         )
@@ -212,7 +216,7 @@ fun CooldownOptionsEditor(
                     title = stringResource(R.string.cooldown_quieter_sound_title),
                     subtitle = stringResource(R.string.cooldown_quieter_sound_subtitle),
                     icon = Icons.Outlined.VolumeOff,
-                    checked = options.soundPolite == SoundOption.SILENT,
+                    checked = CooldownSwitches.politeSilentSound(options),
                     shape = getExpressiveShape(4, 0, ShapeStyle.Large),
                     onCheckedChange = {
                         onUpdate(
@@ -227,7 +231,7 @@ fun CooldownOptionsEditor(
                     title = stringResource(R.string.cooldown_silent_sound_title),
                     subtitle = stringResource(R.string.cooldown_silent_sound_subtitle),
                     icon = Icons.Outlined.VolumeOff,
-                    checked = options.soundMuted == SoundOption.SILENT,
+                    checked = CooldownSwitches.mutedSilentSound(options),
                     shape = getExpressiveShape(4, 1, ShapeStyle.Large),
                     onCheckedChange = {
                         onUpdate(
@@ -242,7 +246,7 @@ fun CooldownOptionsEditor(
                     title = stringResource(R.string.cooldown_quieter_vibration_title),
                     subtitle = stringResource(R.string.cooldown_quieter_vibration_subtitle),
                     icon = Icons.Outlined.DoNotDisturbOn,
-                    checked = options.vibrationPolite == VibrationOption.OFF,
+                    checked = CooldownSwitches.politeVibrationOff(options),
                     shape = getExpressiveShape(4, 2, ShapeStyle.Large),
                     onCheckedChange = {
                         onUpdate(
@@ -258,7 +262,7 @@ fun CooldownOptionsEditor(
                     title = stringResource(R.string.cooldown_silent_vibration_title),
                     subtitle = stringResource(R.string.cooldown_silent_vibration_subtitle),
                     icon = Icons.Outlined.DoNotDisturbOn,
-                    checked = options.vibrationMuted == VibrationOption.OFF,
+                    checked = CooldownSwitches.mutedVibrationOff(options),
                     shape = getExpressiveShape(4, 3, ShapeStyle.Large),
                     onCheckedChange = {
                         onUpdate(
@@ -441,7 +445,7 @@ fun CooldownOptionsEditor(
                     title = stringResource(R.string.cooldown_island_polite_title),
                     subtitle = stringResource(R.string.cooldown_island_polite_subtitle),
                     icon = Icons.Outlined.NotificationsActive,
-                    checked = options.islandPolite == IslandOption.SUPPRESS,
+                    checked = CooldownSwitches.politeIslandSuppressed(options),
                     shape = getExpressiveShape(2, 0, ShapeStyle.Large),
                     onCheckedChange = {
                         onUpdate(
@@ -457,7 +461,7 @@ fun CooldownOptionsEditor(
                     title = stringResource(R.string.cooldown_island_muted_title),
                     subtitle = stringResource(R.string.cooldown_island_muted_subtitle),
                     icon = Icons.Outlined.NotificationsActive,
-                    checked = options.islandMuted == IslandOption.SUPPRESS,
+                    checked = CooldownSwitches.mutedIslandSuppressed(options),
                     shape = getExpressiveShape(2, 1, ShapeStyle.Large),
                     onCheckedChange = {
                         onUpdate(
@@ -494,7 +498,7 @@ fun CooldownOptionsEditor(
                     title = stringResource(R.string.cooldown_heads_up_quieter_title),
                     subtitle = stringResource(R.string.cooldown_heads_up_quieter_subtitle),
                     icon = Icons.Filled.Warning,
-                    checked = options.headsUpPolite == HeadsUpOption.SUPPRESS,
+                    checked = CooldownSwitches.politeHeadsUpSuppressed(options),
                     shape = getExpressiveShape(3, 0, ShapeStyle.Large),
                     onCheckedChange = {
                         onUpdate(
@@ -510,7 +514,7 @@ fun CooldownOptionsEditor(
                     title = stringResource(R.string.cooldown_heads_up_silent_title),
                     subtitle = stringResource(R.string.cooldown_heads_up_silent_subtitle),
                     icon = Icons.Filled.Warning,
-                    checked = options.headsUpMuted == HeadsUpOption.SUPPRESS,
+                    checked = CooldownSwitches.mutedHeadsUpSuppressed(options),
                     shape = getExpressiveShape(3, 1, ShapeStyle.Large),
                     onCheckedChange = {
                         onUpdate(

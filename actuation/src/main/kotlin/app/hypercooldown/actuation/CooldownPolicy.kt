@@ -16,6 +16,25 @@ data class Presentation(
 )
 
 /**
+ * One state's four per-state effects, **with nothing left unset**.
+ *
+ * This exists because "nobody has chosen" is an answer, and it is the common case: every option in
+ * [CooldownOptions] is nullable, and a switch drawn from the nullable field compares `null` against
+ * the value it would write and shows **off**. That is the reported defect — "make a repeating alert
+ * silent" and "stop the vibration" are on by their own copy and on in the realisation, and were shown
+ * off — so the screen and the write path read the same resolved answer from here instead.
+ *
+ * Non-null by construction, and separate from [Presentation] because [Presentation] carries the two
+ * options that have no per-state choice and is nullable (the host's own package is refused).
+ */
+data class CooldownEffects(
+    val sound: SoundOption,
+    val vibration: VibrationOption,
+    val headsUp: HeadsUpOption,
+    val island: IslandOption,
+)
+
+/**
  * The answers AOSP never had to give, because AOSP was the platform.
  *
  * A pure function of `(state, package, ownPackage, options)`. It returns `null` when there is nothing
@@ -29,26 +48,58 @@ data class Presentation(
  * bit, and `ChannelActuator.restore` sends it), so a switch that blocks a documented, reversible
  * change is a trap rather than a safeguard. What the user is owed instead is the honest cost, stated
  * where the switch is — the screen's job, not the policy's.
+ *
+ * **[effects] is where an unset option is resolved, and it is the only place.** The screen's switches,
+ * [headsUp] (what the write path is handed) and [presentation] (what the island decision reads) all
+ * ask it, so a row and the behaviour behind it cannot disagree about a default again.
  */
 object CooldownPolicy {
 
     /**
-     * AOSP's own treatment of the heads-up in each damped state, which is what an unset option means.
+     * AOSP's own treatment of one state, named — i.e. what every unset option resolves to.
      *
-     * POLITE inherits: it is a real, audible alert at 30 %, and removing its banner while keeping the
-     * sound would be a deviation with no intent behind it. MUTED suppresses: its own realisation has
-     * already cleared the sound and the vibration, so the banner is the last attention effect left,
-     * and leaving it up is the one thing the state's name promises not to do.
+     * POLITE inherits everything: it is a real, audible alert at 30 %, and taking away its banner
+     * while keeping its sound would be a deviation with no intent behind it.
+     *
+     * MUTED's *own realisation* has already cleared the sound and the vibration, so `SILENT` and `OFF`
+     * are not new behaviour there, they are the existing behaviour written down: `EditFactory` writes
+     * `soundUri = null` for MUTED and clears the vibration flag (`MUTED -> vibrationEnabled = false`),
+     * and AOSP itself is the same — `NotificationRecord.getVibrationForChannel` returns `null` when
+     * `!channel.shouldVibrate()` (`research/aosp/NotificationRecord.java:320`). A silent alert that
+     * still buzzed would not be silent.
+     *
+     * The banner is the one place the state and AOSP disagree: MUTED keeps the heads-up, so the last
+     * attention effect would still take the screen — the one deviation the option set offers, and the
+     * reason `headsUpMuted` resolves to `SUPPRESS` rather than to AOSP's `INHERIT`.
      */
-    val HEADS_UP_DEFAULTS = HeadsUpRealisation(
-        polite = HeadsUpOption.INHERIT,
-        muted = HeadsUpOption.SUPPRESS,
-    )
+    fun effects(options: CooldownOptions, state: CooldownState): CooldownEffects = when (state) {
+        // DEFAULT is AOSP's own treatment: nothing is damped, so no option applies.
+        CooldownState.DEFAULT -> CooldownEffects(
+            sound = SoundOption.INHERIT,
+            vibration = VibrationOption.INHERIT,
+            headsUp = HeadsUpOption.INHERIT,
+            island = IslandOption.INHERIT,
+        )
+
+        CooldownState.POLITE -> CooldownEffects(
+            sound = options.soundPolite ?: SoundOption.INHERIT,
+            vibration = options.vibrationPolite ?: VibrationOption.INHERIT,
+            headsUp = options.headsUpPolite ?: HeadsUpOption.INHERIT,
+            island = options.islandPolite ?: IslandOption.INHERIT,
+        )
+
+        CooldownState.MUTED -> CooldownEffects(
+            sound = options.soundMuted ?: SoundOption.SILENT,
+            vibration = options.vibrationMuted ?: VibrationOption.INHERIT,
+            headsUp = options.headsUpMuted ?: HeadsUpOption.SUPPRESS,
+            island = options.islandMuted ?: IslandOption.INHERIT,
+        )
+    }
 
     /** The heads-up realisation one app's options resolve to — what the write path is handed. */
     fun headsUp(options: CooldownOptions): HeadsUpRealisation = HeadsUpRealisation(
-        polite = options.headsUpPolite ?: HEADS_UP_DEFAULTS.polite,
-        muted = options.headsUpMuted ?: HEADS_UP_DEFAULTS.muted,
+        polite = effects(options, CooldownState.POLITE).headsUp,
+        muted = effects(options, CooldownState.MUTED).headsUp,
     )
 
     fun presentation(
@@ -70,17 +121,15 @@ object CooldownPolicy {
             relay = RelayOption.INHERIT,
         )
 
-        val polite = state == CooldownState.POLITE
-        val headsUp = headsUp(options)
+        val realised = effects(options, state)
 
         return Presentation(
-            sound = (if (polite) options.soundPolite else options.soundMuted) ?: SoundOption.INHERIT,
-            vibration = (if (polite) options.vibrationPolite else options.vibrationMuted)
-                ?: VibrationOption.INHERIT,
-            headsUp = headsUp.forState(state),
+            sound = realised.sound,
+            vibration = realised.vibration,
+            headsUp = realised.headsUp,
             // Deliberately independent of the heads-up row: the island is the host's own notification,
             // so not posting it writes nothing to the system and touches no channel (spec 4.1, 4.2).
-            island = (if (polite) options.islandPolite else options.islandMuted) ?: IslandOption.INHERIT,
+            island = realised.island,
             visibility = options.mutedVisibility ?: VisibilityOption.INHERIT,
             relay = options.relayDuringCooldown ?: RelayOption.INHERIT,
         )

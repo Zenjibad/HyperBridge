@@ -29,7 +29,13 @@ class CooldownPolicyTest {
     @Test
     fun `inherit resolves to AOSP's values in MUTED`() {
         val p = presentation(CooldownState.MUTED)!!
-        assertEquals(SoundOption.INHERIT, p.sound)
+        // Re-derived from the realisation, not weakened. An unset MUTED sound used to be reported as
+        // `INHERIT`, which *means* "AOSP's treatment" — and AOSP's treatment of a muted alert is no
+        // sound at all, which is exactly what `EditFactory` writes (`MUTED -> soundUri = null`). The
+        // value was pointing at the behaviour; now it names it. Nothing realises `Presentation.sound`
+        // either way, so no write changes: what changes is that the screen's silent row can read a
+        // value that is true of the feature instead of comparing `null` against `SILENT`.
+        assertEquals(SoundOption.SILENT, p.sound)
         assertEquals(HeadsUpOption.SUPPRESS, p.headsUp)
         assertEquals(IslandOption.INHERIT, p.island)
     }
@@ -126,5 +132,45 @@ class CooldownPolicyTest {
         val options = CooldownOptions(soundPolite = SoundOption.SILENT, soundMuted = SoundOption.INHERIT)
         assertEquals(SoundOption.SILENT, presentation(CooldownState.POLITE, options)!!.sound)
         assertEquals(SoundOption.INHERIT, presentation(CooldownState.MUTED, options)!!.sound)
+    }
+
+    @Test
+    fun `an unset option resolves to the effect its own state realises, in one place`() {
+        // The reported defect: the screen drew its switches from the nullable field, so every option
+        // nobody had chosen showed *off* — while the copy beside it said "On by default" and the
+        // realisation did the thing. `effects` is the answer both of them read now.
+        val untouched = CooldownOptions()
+
+        val muted = CooldownPolicy.effects(untouched, CooldownState.MUTED)
+        assertEquals(SoundOption.SILENT, muted.sound)
+        assertEquals(HeadsUpOption.SUPPRESS, muted.headsUp)
+
+        val polite = CooldownPolicy.effects(untouched, CooldownState.POLITE)
+        assertEquals(SoundOption.INHERIT, polite.sound)
+        assertEquals(VibrationOption.INHERIT, polite.vibration)
+        assertEquals(HeadsUpOption.INHERIT, polite.headsUp)
+    }
+
+    @Test
+    fun `an explicit choice still wins over the default in either direction`() {
+        val chosen = CooldownOptions(soundMuted = SoundOption.INHERIT, headsUpMuted = HeadsUpOption.INHERIT)
+        val muted = CooldownPolicy.effects(chosen, CooldownState.MUTED)
+        assertEquals(SoundOption.INHERIT, muted.sound)
+        assertEquals(HeadsUpOption.INHERIT, muted.headsUp)
+    }
+
+    @Test
+    fun `the write path is handed the same resolution the screen shows`() {
+        // One place, two readers: the heads-up realisation the actuator writes cannot disagree with
+        // the switch the user is looking at.
+        val untouched = CooldownOptions()
+        assertEquals(
+            CooldownPolicy.effects(untouched, CooldownState.MUTED).headsUp,
+            CooldownPolicy.headsUp(untouched).muted,
+        )
+        assertEquals(
+            CooldownPolicy.effects(untouched, CooldownState.POLITE).headsUp,
+            CooldownPolicy.headsUp(untouched).polite,
+        )
     }
 }
